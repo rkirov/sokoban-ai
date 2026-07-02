@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: rustup update stable && rustup default stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build (release)
+        run: cargo build --release --locked
+
+      - name: Unit and regression tests
+        run: cargo test --release --locked
+
+      - name: Solver smoke benchmark (Microban I, 2s/level, must solve 150+)
+        run: |
+          ./target/release/sokoban-solver levels/microban1.txt --time-limit 2 --quiet \
+            | tee bench.out
+          solved=$(sed -n 's/^\([0-9]*\)\/[0-9]* solved.*/\1/p' bench.out)
+          echo "solved: $solved"
+          test "$solved" -ge 150
+
+      - name: Optimality invariant (corral pruning must not change push counts)
+        run: |
+          ./target/release/sokoban-solver levels/test-quick.txt --mode optimal \
+            | tee opt.out
+          ./target/release/sokoban-solver levels/test-quick.txt --mode optimal --no-corral \
+            | tee opt-nc.out
+          diff <(grep -o '[0-9]* pushes' opt.out) <(grep -o '[0-9]* pushes' opt-nc.out)
