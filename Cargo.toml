@@ -1,0 +1,11 @@
+[package]
+name = "sokoban-solver"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rustc-hash = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
