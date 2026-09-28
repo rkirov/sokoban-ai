@@ -146,28 +146,10 @@ next things to try there.
 - **Reinforcement learning** only after the classical techniques are
   exhausted, and only as an advisor inside FESS (never a pruner).
 
-## What did not work (measured and removed)
+## Experiments
 
-- Handing near-complete FESS positions to a budgeted A\* (−6 XSokoban levels).
-- A greedy "move boxes closer to goals" advisor (−6).
-- A breadth-first endgame table around the goal state (no gains, 2× slower):
-  FESS's stalled near-complete positions turned out to be dead, not short.
-- Festival's "prefer boxes farther from goals" tie-break (−2); free moves at
-  nodes with at most two moves (−2); FIFO vs LIFO in-cell tie-breaks (0).
-- Relaxed-plan progress on *every* level (−1): a single fill order is more
-  restrictive than the partial order when no parking is needed.
-- Portfolio variants: a weighted backward thread (stronger alone, SokHard
-  70 vs 61, but the portfolio dropped from 97 to 87 — optimal backward's
-  solves are the ones no other thread covers), a second FESS thread with
-  plans that fetch boxes from farther away, and bidir with A\*'s gate and
-  frozen-wall rules (+7 alone, portfolio-neutral). Solo strength is not
-  portfolio value.
-- Four-box deadlock tables on small levels: 36% fewer A\* nodes on SokHard
-  but no more levels solved (84 vs 85) — the per-node checks eat the gain.
-- A pair lower bound (sum over disjoint box pairs of exact two-box push
-  distances — admissible because every push moves one box): 14-28% fewer A\*
-  nodes, but slower overall and fewer solves (SokHard optimal-only 62 vs 69),
-  even with precomputed per-pair gains.
+Every technique tried — kept or not — with its reasoning and measurement is
+in [EXPERIMENTS.md](EXPERIMENTS.md).
 
 ## Lessons encoded in the code
 
