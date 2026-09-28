@@ -14,7 +14,7 @@ cargo build --release
 ./target/release/sokoban-solver levels/microban1.txt                  # solve all levels (portfolio)
 ./target/release/sokoban-solver levels/microban1.txt --level 42      # one level
 ./target/release/sokoban-solver levels/xsokoban.txt --time-limit 60  # per-level budget (seconds)
-./target/release/sokoban-solver f.txt --portfolio optimal,bidir,fess,fess-far # choose the racing strategies
+./target/release/sokoban-solver f.txt --portfolio optimal,bidir,fess      # choose the racing strategies
 ./target/release/sokoban-solver f.txt --mode optimal                 # push-optimal A* only
 ./target/release/sokoban-solver f.txt --mode fess                    # feature-space search only
 ./target/release/sokoban-solver f.txt --mode backward                # pull search from the goal
@@ -34,8 +34,7 @@ Four threads race with the full time budget each; the first *solution*
 stops the others. Default: push-optimal A\* (reported solutions are optimal
 whenever it finishes first), bidirectional search, FESS, and backward (pull)
 search. The portfolio was chosen by measuring each strategy's *unique*
-solves (weighted A\* and a second FESS variant are available with
-`--portfolio`, but added less).
+solves (weighted A\* is available with `--portfolio` but added none).
 
 An "unsolvable" verdict only ends the thread that reached it: solutions are
 verified by replay, verdicts are not, so one unsound strategy cannot stop
@@ -157,6 +156,12 @@ next things to try there.
   nodes with at most two moves (−2); FIFO vs LIFO in-cell tie-breaks (0).
 - Relaxed-plan progress on *every* level (−1): a single fill order is more
   restrictive than the partial order when no parking is needed.
+- Portfolio variants: a weighted backward thread (stronger alone, SokHard
+  70 vs 61, but the portfolio dropped from 97 to 87 — optimal backward's
+  solves are the ones no other thread covers), a second FESS thread with
+  plans that fetch boxes from farther away, and bidir with A\*'s gate and
+  frozen-wall rules (+7 alone, portfolio-neutral). Solo strength is not
+  portfolio value.
 - Four-box deadlock tables on small levels: 36% fewer A\* nodes on SokHard
   but no more levels solved (84 vs 85) — the per-node checks eat the gain.
 - A pair lower bound (sum over disjoint box pairs of exact two-box push

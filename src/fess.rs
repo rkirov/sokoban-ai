@@ -89,26 +89,11 @@ struct Pending {
 /// "exhausted" instead of exhausting memory.
 const MAX_PENDING: usize = 20_000_000;
 
-/// FESS variants (portfolio diversity).
-#[derive(Clone, Copy)]
-pub struct Config {
-    /// Relaxed plan removals only at start squares at least this far (in
-    /// steps) from every goal; see retro.rs.
-    pub removal_distance: u32,
-}
-
-impl Config {
-    pub const DEFAULT: Config = Config { removal_distance: 0 };
-    /// Plans that fetch boxes from farther away: different plans solve
-    /// different levels (opt-in second FESS thread, `--portfolio fess-far`).
-    pub const FAR: Config = Config { removal_distance: 6 };
-}
-
-pub fn solve(board: &Board, opts: &Options, config: &Config) -> Outcome {
+pub fn solve(board: &Board, opts: &Options) -> Outcome {
     let start_time = Instant::now();
     let mut stats = Stats::default();
     let plan = PackingPlan::compute(board);
-    let relaxed = RelaxedPlan::compute(board, 20_000, config.removal_distance).filter(|r| r.has_parking());
+    let relaxed = RelaxedPlan::compute(board, 20_000).filter(|r| r.has_parking());
     let hotspots = Hotspots::compute(board);
     let packed = |boxes: &[u16]| match &relaxed {
         Some(r) => r.progress(boxes),

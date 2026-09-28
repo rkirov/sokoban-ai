@@ -21,8 +21,8 @@ use std::time::Duration;
 /// One thread of the racing portfolio. The default portfolio was chosen by
 /// measuring each strategy's unique solves at 10 s/level: optimal A* (also
 /// gives push-optimal answers), bidirectional search, FESS (large levels)
-/// and backward search (cramped goal areas). Weighted A* and the second FESS
-/// variant solved fewer levels the others miss, so they are opt-in.
+/// and backward search (cramped goal areas). Weighted A* solved no level the
+/// others miss, so it is opt-in.
 #[derive(Clone, Copy)]
 enum Strategy {
     /// Forward push-optimal A*.
@@ -36,12 +36,12 @@ enum Strategy {
     /// backward.
     Backward,
     /// Feature-space search over macro moves.
-    Fess(fess::Config),
+    Fess,
 }
 
 impl Strategy {
     const DEFAULT: [Strategy; 4] =
-        [Strategy::Optimal, Strategy::Bidir, Strategy::Fess(fess::Config::DEFAULT), Strategy::Backward];
+        [Strategy::Optimal, Strategy::Bidir, Strategy::Fess, Strategy::Backward];
 
     fn parse(name: &str) -> Option<Self> {
         Some(match name {
@@ -49,8 +49,7 @@ impl Strategy {
             "bidir" => Strategy::Bidir,
             "weighted" => Strategy::Weighted,
             "backward" => Strategy::Backward,
-            "fess" => Strategy::Fess(fess::Config::DEFAULT),
-            "fess-far" => Strategy::Fess(fess::Config::FAR),
+            "fess" => Strategy::Fess,
             _ => return None,
         })
     }
@@ -61,8 +60,7 @@ impl Strategy {
             Strategy::Bidir => "bidir",
             Strategy::Weighted => "weighted",
             Strategy::Backward => "backward",
-            Strategy::Fess(c) if c.removal_distance > 0 => "fess-far",
-            Strategy::Fess(_) => "fess",
+            Strategy::Fess => "fess",
         }
     }
 
@@ -81,7 +79,7 @@ impl Strategy {
             Strategy::Bidir => staged(Mode::OptimalPushes, Mode::Weighted(2), bidir::solve),
             Strategy::Weighted => staged(Mode::Weighted(3), Mode::Weighted(5), solver::solve),
             Strategy::Backward => solver::solve_backward(board, &Options { mode: Mode::OptimalPushes, ..opts.clone() }),
-            Strategy::Fess(config) => fess::solve(board, opts, config),
+            Strategy::Fess => fess::solve(board, opts),
         }
     }
 }
@@ -195,7 +193,7 @@ fn print_plan(board: &Board) {
     let _ = deadsets::DeadSetTables::new(board, deadsets::Direction::Forward);
     println!("dead-set tables: {:.1?}", t.elapsed());
     let t = std::time::Instant::now();
-    let relaxed = retro::RelaxedPlan::compute(board, 20_000, 0);
+    let relaxed = retro::RelaxedPlan::compute(board, 20_000);
     match &relaxed {
         Some(r) => {
             let parks = r.steps.iter().filter(|s| s.from.is_some()).count();
@@ -240,7 +238,7 @@ fn main() {
     if args.is_empty() {
         eprintln!(
             "usage: sokoban-solver <levels.txt> [--level N] [--time-limit SECS]\n\
-             \x20 [--portfolio optimal,bidir,weighted,backward,fess,fess-far]   (default: optimal,bidir,fess,backward)\n\
+             \x20 [--portfolio optimal,bidir,weighted,backward,fess]   (default: optimal,bidir,fess,backward)\n\
              \x20 [--mode auto|optimal|greedy|weighted:W|backward|bidir|fess]\n\
              \x20 [--memory-limit GB]   (default: half of RAM)  [--max-nodes N] [--no-corral]\n\
              \x20 [--solutions FILE] [--quiet] [--show-plan]"
@@ -363,7 +361,7 @@ fn main() {
             } else if backward {
                 (solver::solve_backward(&board, &opts), "backward")
             } else if fess_mode {
-                (fess::solve(&board, &opts, &fess::Config::DEFAULT), "fess")
+                (fess::solve(&board, &opts), "fess")
             } else if bidir_mode {
                 (bidir::solve(&board, &opts), "bidir")
             } else {

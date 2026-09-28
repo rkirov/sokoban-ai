@@ -52,34 +52,13 @@ struct Node {
 const NO_PARENT: u32 = u32::MAX;
 
 impl RelaxedPlan {
-    /// Search the relaxed backward problem with a node budget. Boxes are
-    /// removed only at start squares at least `removal_distance` steps from
-    /// every goal (all start squares if none is that far). None if no
+    /// Search the relaxed backward problem with a node budget. None if no
     /// complete plan was found.
-    pub fn compute(board: &Board, max_nodes: usize, removal_distance: u32) -> Option<Self> {
+    pub fn compute(board: &Board, max_nodes: usize) -> Option<Self> {
         let n = board.num_squares;
-        // Walking distance from the nearest goal.
-        let mut goal_bfs = vec![u32::MAX; n];
-        let mut queue: std::collections::VecDeque<u16> = board.goals.iter().copied().collect();
-        for &g in &board.goals {
-            goal_bfs[g as usize] = 0;
-        }
-        while let Some(s) = queue.pop_front() {
-            for &nb in &board.neighbors[s as usize] {
-                if nb != NONE && goal_bfs[nb as usize] == u32::MAX {
-                    goal_bfs[nb as usize] = goal_bfs[s as usize] + 1;
-                    queue.push_back(nb);
-                }
-            }
-        }
         let mut is_start = vec![false; n];
         for &b in &board.start_boxes {
-            is_start[b as usize] = goal_bfs[b as usize] >= removal_distance;
-        }
-        if !is_start.iter().any(|&s| s) {
-            for &b in &board.start_boxes {
-                is_start[b as usize] = true;
-            }
+            is_start[b as usize] = true;
         }
         let mut macro_gen = MacroGen::new(board);
         let mut arena: Vec<Node> = Vec::new();
@@ -234,7 +213,7 @@ mod tests {
     #[test]
     fn corridor_plan_fills_deepest_first_without_parking() {
         let b = board("#########\n#@$$$...#\n#########");
-        let plan = RelaxedPlan::compute(&b, 1000, 0).expect("plan");
+        let plan = RelaxedPlan::compute(&b, 1000).expect("plan");
         assert!(!plan.has_parking());
         assert_eq!(plan.steps.len(), 3);
         let deepest = b.sq_index[b.width + 7];
@@ -248,7 +227,7 @@ mod tests {
         let text = std::fs::read_to_string("levels/xsokoban.txt").unwrap();
         let lvl = parse_collection(&text).into_iter().find(|l| l.name == "screen.44").unwrap();
         let b = Board::from_level(&lvl).unwrap();
-        let plan = RelaxedPlan::compute(&b, 20_000, 0).expect("plan");
+        let plan = RelaxedPlan::compute(&b, 20_000).expect("plan");
         assert!(plan.has_parking(), "the 3x3 goal block needs a parked box");
         assert_eq!(plan.progress(&b.goals), plan.steps.len() as u32);
     }
