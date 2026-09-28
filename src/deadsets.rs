@@ -120,8 +120,16 @@ impl DeadSets {
             s[..k].copy_from_slice(set);
             s[..k].sort_unstable();
             let code = db.code(&s[..k]);
-            for z in 0..zone_count[code].min(8) {
-                if reached[code] & (1 << z) == 0 {
+            // Forward: the solved position's player can be anywhere, so every
+            // region seeds. Backward: any real solution, restricted to these
+            // boxes, starts with the player where it actually starts — seeding
+            // only that region is sound and tighter (suggested by Codex).
+            let zones: Vec<u8> = match dir {
+                Direction::Forward => (0..zone_count[code].min(8)).collect(),
+                Direction::Backward => vec![db.zone(&s[..k], board.start_player)],
+            };
+            for z in zones {
+                if z < 8 && reached[code] & (1 << z) == 0 {
                     reached[code] |= 1 << z;
                     queue.push((s, z));
                 }

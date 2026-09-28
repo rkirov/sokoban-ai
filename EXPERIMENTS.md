@@ -7,8 +7,15 @@ it, with the reasoning and the measurement that decided it.
 full default portfolio, counted as levels solved. Every solution is
 replayed against the level text. A technique is kept only if it adds
 solves on the real problem packs (Microban I–IV, XSokoban, Large Test Suite
-sets) beyond run-to-run noise (about ±3 on SokHard); when results are
-equal, the simpler code wins. Pruning rules must also leave optimal push
+sets) beyond run-to-run noise; when results are equal, the simpler code
+wins.
+
+**Noise.** The machine is shared (other agent sessions, memory pressure),
+so wall-clock portfolio runs on SokHard vary by about ±5–6 levels between
+identical builds (the same build measured 94, 97 and 98). Changes that
+alter the search are therefore also compared with deterministic
+node-limited runs of the affected thread; pure speed-ups must first
+reproduce identical node counts, then are judged by total time. Pruning rules must also leave optimal push
 counts unchanged level by level (A\*, Microban I–IV).
 
 Packs: Microban I–IV (493), XSokoban (90), and from the Large Test Suite
@@ -85,7 +92,7 @@ Same-machine reference: YASS 2.153 solves 117 SokHard levels at 10 s
 
 | Change | Result | Status |
 |--------|--------|--------|
-| Bucket open list (identical order) | backward 10–15% faster, 4× smaller queue entries | portfolio A/B pending |
+| Bucket open list (identical order) | identical node counts; backward 10–15% faster, 4× smaller queue entries; SokHard portfolio 94 vs 83 without it (noisy) | kept |
 | Transposed distance tables | identical nodes, slightly slower | rejected |
 | Warm-start matching from the parent's saved state (backward) | 17–25% faster; portfolio 94 vs 97 | dropped (patch kept) |
 | Warm-start matching (forward A\*) | not measured once the backward result was known | dropped |
@@ -94,7 +101,7 @@ Same-machine reference: YASS 2.153 solves 117 SokHard levels at 10 s
 
 | Idea | Assessment | Status |
 |------|------------|--------|
-| Seed backward dead-set tables only from the actual start-player region | sound (projection of a real solution) and free | measuring |
+| Seed backward dead-set tables only from the actual start-player region | sound (projection of a real solution) and free | backward A\* with a fixed 400k-node budget on SokHard: 47 → 48, identical optimal pushes; wall-clock portfolio too noisy to resolve | kept (7 lines) |
 | Dual-based O(m) child lower bounds, exact matching only when popped | sound (weak duality) | not tried yet |
 | Backward "freeze": erase pullable boxes to a fixed point; leftovers never move | sound | not tried yet |
 | Generation-time duplicate rejection in backward search | plausible | not tried |
