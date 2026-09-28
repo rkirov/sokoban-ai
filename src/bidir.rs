@@ -86,8 +86,6 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
     let mut reach_gen = 0u32;
     let mut bfs_queue: Vec<u16> = Vec::with_capacity(board.num_squares);
     let mut frozen_flags: Vec<bool> = Vec::new();
-    let mut frozen_squares: Vec<u16> = Vec::new();
-    let mut frozen_walls = crate::deadlock::FrozenWalls::new(board);
 
     // Note: spliced solutions are not push-optimal in any mode (first meet
     // wins); OptimalPushes here just means both halves order by g + h.
@@ -320,11 +318,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                 return Outcome::Solved { pushes, stats };
             }
 
-            // Gate push (level.rs `forced_pushes`): only the pushed box's
-            // forward push. Otherwise PI-corral restriction, if any.
-            let candidates = if parent != NO_PARENT && board.forced[box_from as usize][dir as usize] {
-                Some(vec![(board.neighbors[box_from as usize][dir as usize], dir)])
-            } else if opts.corral {
+            let candidates = if opts.corral {
                 match corral.analyze(
                     board,
                     &box_at,
@@ -359,19 +353,13 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                 continue;
             }
             let frozen = &frozen_flags;
-            // Distances with boxes frozen on goals as walls (deadlock::FrozenWalls).
-            frozen_squares.clear();
-            frozen_squares.extend(node_boxes.iter().zip(frozen.iter()).filter(|p| *p.1).map(|p| *p.0));
-            let walled = (!frozen_squares.is_empty()).then(|| frozen_walls.distances(board, &frozen_squares));
-            let dist_table = walled.as_deref().unwrap_or(&board.goal_dist);
             if fwd
                 .matcher
                 .solve(node_boxes.len(), board.goals.len(), |i, j| {
                     if frozen[i] {
                         return (board.goals[j] == node_boxes[i]).then_some(0);
                     }
-                    let d = dist_table[j][node_boxes[i] as usize];
-                    (d != INF).then_some(d)
+                    fwd_cost(node_boxes, i, j)
                 })
                 .is_none()
             {
@@ -415,7 +403,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                             return (board.goals[j] == node_boxes[i]).then_some(0);
                         }
                         let sq = if i == bi { to } else { node_boxes[i] };
-                        let dist = dist_table[j][sq as usize];
+                        let dist = board.goal_dist[j][sq as usize];
                         (dist != INF).then_some(dist)
                     })
                 };
