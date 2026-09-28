@@ -15,7 +15,6 @@ cargo build --release
 ./target/release/sokoban-solver levels/microban1.txt --level 42      # one level
 ./target/release/sokoban-solver levels/xsokoban.txt --time-limit 60  # per-level budget (seconds)
 ./target/release/sokoban-solver f.txt --portfolio optimal,bidir,fess,fess-far # choose the racing strategies
-                                                                      # (also: weighted, backward, backward:W)
 ./target/release/sokoban-solver f.txt --mode optimal                 # push-optimal A* only
 ./target/release/sokoban-solver f.txt --mode fess                    # feature-space search only
 ./target/release/sokoban-solver f.txt --mode backward                # pull search from the goal
@@ -164,11 +163,6 @@ next things to try there.
   distances — admissible because every push moves one box): 14-28% fewer A\*
   nodes, but slower overall and fewer solves (SokHard optimal-only 62 vs 69),
   even with precomputed per-pair gains.
-- Weighted backward search (`backward:3`) as the portfolio's backward
-  thread: stronger alone (SokHard 70 vs 61) but the portfolio dropped from
-  97 to 87 — optimal backward solves levels no other thread covers, while
-  the weighted variant's extra solves overlap bidir and FESS. Solo strength
-  is not portfolio value; measure the union.
 
 ## Lessons encoded in the code
 
