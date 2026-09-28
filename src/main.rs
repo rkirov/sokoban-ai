@@ -32,23 +32,24 @@ enum Strategy {
     Bidir,
     /// Weighted A*: w=3 for half the budget, then w=5.
     Weighted,
-    /// Backward (pull) A* from the goal: cramped goal areas are easy
-    /// backward.
-    Backward,
+    /// Backward (pull) search from the goal with f = g + w*h (w = 1:
+    /// optimal): cramped goal areas are easy backward.
+    Backward(u32),
     /// Feature-space search over macro moves.
     Fess(fess::Config),
 }
 
 impl Strategy {
     const DEFAULT: [Strategy; 4] =
-        [Strategy::Optimal, Strategy::Bidir, Strategy::Fess(fess::Config::DEFAULT), Strategy::Backward];
+        [Strategy::Optimal, Strategy::Bidir, Strategy::Fess(fess::Config::DEFAULT), Strategy::Backward(1)];
 
     fn parse(name: &str) -> Option<Self> {
         Some(match name {
             "optimal" => Strategy::Optimal,
             "bidir" => Strategy::Bidir,
             "weighted" => Strategy::Weighted,
-            "backward" => Strategy::Backward,
+            "backward" => Strategy::Backward(1),
+            _ if name.starts_with("backward:") => Strategy::Backward(name["backward:".len()..].parse().ok()?),
             "fess" => Strategy::Fess(fess::Config::DEFAULT),
             "fess-far" => Strategy::Fess(fess::Config::FAR),
             _ => return None,
@@ -60,7 +61,8 @@ impl Strategy {
             Strategy::Optimal => "fwd-optimal",
             Strategy::Bidir => "bidir",
             Strategy::Weighted => "weighted",
-            Strategy::Backward => "backward",
+            Strategy::Backward(1) => "backward",
+            Strategy::Backward(_) => "backward-weighted",
             Strategy::Fess(c) if c.removal_distance > 0 => "fess-far",
             Strategy::Fess(_) => "fess",
         }
@@ -80,7 +82,10 @@ impl Strategy {
             Strategy::Optimal => solver::solve(board, &Options { mode: Mode::OptimalPushes, ..opts.clone() }),
             Strategy::Bidir => staged(Mode::OptimalPushes, Mode::Weighted(2), bidir::solve),
             Strategy::Weighted => staged(Mode::Weighted(3), Mode::Weighted(5), solver::solve),
-            Strategy::Backward => solver::solve_backward(board, &Options { mode: Mode::OptimalPushes, ..opts.clone() }),
+            Strategy::Backward(w) => {
+                let mode = if *w <= 1 { Mode::OptimalPushes } else { Mode::Weighted(*w) };
+                solver::solve_backward(board, &Options { mode, ..opts.clone() })
+            }
             Strategy::Fess(config) => fess::solve(board, opts, config),
         }
     }
@@ -240,7 +245,7 @@ fn main() {
     if args.is_empty() {
         eprintln!(
             "usage: sokoban-solver <levels.txt> [--level N] [--time-limit SECS]\n\
-             \x20 [--portfolio optimal,bidir,weighted,backward,fess,fess-far]   (default: optimal,bidir,fess,backward)\n\
+             \x20 [--portfolio optimal,bidir,weighted,backward,backward:W,fess,fess-far]   (default: optimal,bidir,fess,backward)\n\
              \x20 [--mode auto|optimal|greedy|weighted:W|backward|bidir|fess]\n\
              \x20 [--memory-limit GB]   (default: half of RAM)  [--max-nodes N] [--no-corral]\n\
              \x20 [--solutions FILE] [--quiet] [--show-plan]"
