@@ -33,6 +33,11 @@ pub struct DeadSets {
     dead: Vec<u8>,
     /// Region label per square, for sets that split the floor.
     labels: FxHashMap<u32, Box<[u8]>>,
+    /// partners[s]: bitset of squares that appear together with s in some
+    /// dead set. A moved box can only complete a dead set with its partners,
+    /// so the runtime check first filters the other boxes down to those
+    /// (usually none) — measured as the largest per-child cost otherwise.
+    partners: Vec<Vec<u64>>,
 }
 
 /// Which search the table serves.
@@ -65,7 +70,13 @@ impl DeadSets {
         if n > max_squares(k) || seeds.len() < k {
             return None;
         }
-        let mut db = DeadSets { k, n, dead: vec![0; n.pow(k as u32)], labels: FxHashMap::default() };
+        let mut db = DeadSets {
+            k,
+            n,
+            dead: vec![0; n.pow(k as u32)],
+            labels: FxHashMap::default(),
+            partners: Vec::new(),
+        };
 
         // Region count (and labels, when > 1) of the floor minus each set.
         let mut zone_count = vec![1u8; n.pow(k as u32)];
@@ -158,12 +169,24 @@ impl DeadSets {
             }
         }
 
+        let words = n.div_ceil(64);
+        let mut partners = vec![vec![0u64; words]; n];
         for_each_set(&live, k, &mut |set| {
             let code = db.code(set);
             let zones = zone_count[code].min(8);
             let all = if zones >= 8 { u8::MAX } else { ((1u16 << zones) - 1) as u8 };
             db.dead[code] = all & !reached[code];
+            if db.dead[code] != 0 {
+                for &a in set {
+                    for &b in set {
+                        if a != b {
+                            partners[a as usize][b as usize / 64] |= 1 << (b % 64);
+                        }
+                    }
+                }
+            }
         });
+        db.partners = partners;
         Some(db)
     }
 
@@ -199,6 +222,27 @@ impl DeadSets {
     /// `to` with the player on `player`, does it form a dead set with the
     /// other boxes?
     pub fn moved_box_dead(&self, boxes: &[u16], moved: usize, to: u16, player: u16) -> bool {
+        let part = &self.partners[to as usize];
+        let mut cand = [0u16; 32];
+        let mut m = 0;
+        for (i, &b) in boxes.iter().enumerate() {
+            if i != moved && part[b as usize / 64] >> (b % 64) & 1 == 1 {
+                if m == cand.len() {
+                    return self.moved_box_dead_all(boxes, moved, to, player);
+                }
+                cand[m] = b;
+                m += 1;
+            }
+        }
+        let cand = &cand[..m];
+        match self.k {
+            2 => cand.iter().any(|&b| self.is_dead(&[to, b], player)),
+            _ => (0..m).any(|i| cand[i + 1..].iter().any(|&c| self.is_dead(&[to, cand[i], c], player))),
+        }
+    }
+
+    /// Unfiltered check (fallback when the moved box has many partner boxes).
+    fn moved_box_dead_all(&self, boxes: &[u16], moved: usize, to: u16, player: u16) -> bool {
         let others = || boxes.iter().enumerate().filter(move |&(i, _)| i != moved).map(|(_, &b)| b);
         match self.k {
             2 => others().any(|b| self.is_dead(&[to, b], player)),
@@ -239,6 +283,7 @@ impl DeadSetTables {
     pub fn moved_box_dead(&self, boxes: &[u16], moved: usize, to: u16, player: u16) -> bool {
         self.tables.iter().any(|t| t.moved_box_dead(boxes, moved, to, player))
     }
+
 }
 
 #[cfg(test)]

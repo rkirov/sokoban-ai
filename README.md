@@ -115,17 +115,17 @@ Per-level time limit 10 s, 4-core machine, full default portfolio.
 | Microban I–IV | 493 | **486** | 477 | — |
 | XSokoban | 90 | **67** | — | 88 / 85 |
 | SokEvo | 107 | **107** | — | 107 / 107 |
-| Grigr2001 | 100 | **92** | — | 96 / 96 |
+| Grigr2001 | 100 | **93** | — | 96 / 96 |
 | Holland | 81 | **59** | — | 65 / 68 |
 | Sasquatch | 50 | **29** | — | 41 / 43 |
-| SokHard | 163 | **89** | 117 | 134 / 163 |
+| SokHard | 163 | **98** | 117 | 134 / 163 |
 
 \* From the sokobano.de solver statistics (Large Test Suite), measured on a
 Ryzen 9 7900X with 8+ threads — not directly comparable. YASS was built from
 source and run single-threaded on the same 4-core machine as this solver.
 
 Progress in the September 2026 session (same machine, 10 s): XSokoban
-16 → 67, Microban 480 → 486, SokHard 61 → 89. The remaining gap is on small,
+16 → 67, Microban 480 → 486, SokHard 61 → 98. The remaining gap is on small,
 dense levels (SokHard, Sasquatch), where YASS reaches solutions with far
 fewer search nodes; larger deadlock sets and stronger lower bounds are the
 next things to try there.
@@ -137,9 +137,10 @@ next things to try there.
   SokHard levels shows no dominant cost (children 35-38%, frozen scan +
   matching ~22%, materialization ~15%, heap ~15%, corral ~9% at ~40k
   expansions/s), so engine speed-ups (compact states, incremental hashing)
-  would give ~2x at most; node efficiency matters more. Candidates: deadlock
-  patterns learned from exhausted subtrees, a stronger lower bound (pair
-  penalties on top of matching), YASS-style perimeter search.
+  would give ~2x at most — yet a 60 s run solves 66 of the 74 SokHard levels
+  failed at 10 s (median 24.5 s), so a 2-3x faster engine would close much
+  of the gap. Also: deadlock patterns learned from exhausted subtrees,
+  YASS-style perimeter search.
 - **Large levels** (XSokoban at 67/90): FESS features beyond packing,
   regions and hotspots (room connectivity, out-of-plan boxes), and sharing a
   forward/backward meet table across threads.
@@ -158,6 +159,10 @@ next things to try there.
   restrictive than the partial order when no parking is needed.
 - Four-box deadlock tables on small levels: 36% fewer A\* nodes on SokHard
   but no more levels solved (84 vs 85) — the per-node checks eat the gain.
+- A pair lower bound (sum over disjoint box pairs of exact two-box push
+  distances — admissible because every push moves one box): 14-28% fewer A\*
+  nodes, but slower overall and fewer solves (SokHard optimal-only 62 vs 69),
+  even with precomputed per-pair gains.
 
 ## Lessons encoded in the code
 
