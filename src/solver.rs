@@ -15,8 +15,6 @@ use crate::deadlock::FreezeChecker;
 use crate::level::{Board, NONE};
 use crate::matching::{min_cost_matching, Matcher};
 use rustc_hash::FxHashMap;
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -103,9 +101,61 @@ enum Candidates {
     Restricted(Vec<(u16, u8)>),
 }
 
-/// Min-heap entry: (f, h, seq) lexicographic — ties broken toward lower h,
-/// then FIFO. The child state is materialized only when popped.
-type Entry = Reverse<(u64, u32, u64, u32, u16, u8)>; // f, h, seq, parent, box_from, dir
+/// Open list for small integer keys: pops the lowest f, then the lowest h,
+/// newest first (LIFO keeps the search focused) — the order a binary heap
+/// over (f, h, newest-first) gives, in O(1) per operation instead of
+/// O(log n), with 8-byte entries. An entry is (parent, box_from, dir); the
+/// child state is materialized only when popped.
+struct BucketQueue {
+    /// buckets[f][h]: entries with that key, pushed in order.
+    buckets: Vec<Vec<Vec<(u32, u16, u8)>>>,
+    /// min_h[f]: no entry with this f has a smaller h.
+    min_h: Vec<usize>,
+    /// No entry has a smaller f (pushes may lower it: weighted f can drop).
+    min_f: usize,
+    len: usize,
+}
+
+impl BucketQueue {
+    fn new() -> Self {
+        BucketQueue { buckets: Vec::new(), min_h: Vec::new(), min_f: usize::MAX, len: 0 }
+    }
+
+    fn push(&mut self, f: u64, h: u32, entry: (u32, u16, u8)) {
+        let (f, h) = (f as usize, h as usize);
+        if self.buckets.len() <= f {
+            self.buckets.resize_with(f + 1, Vec::new);
+            self.min_h.resize(f + 1, usize::MAX);
+        }
+        let row = &mut self.buckets[f];
+        if row.len() <= h {
+            row.resize_with(h + 1, Vec::new);
+        }
+        row[h].push(entry);
+        self.min_h[f] = self.min_h[f].min(h);
+        self.min_f = self.min_f.min(f);
+        self.len += 1;
+    }
+
+    fn pop(&mut self) -> Option<(u32, (u32, u16, u8))> {
+        if self.len == 0 {
+            return None;
+        }
+        loop {
+            let f = self.min_f;
+            let row = &mut self.buckets[f];
+            let start = self.min_h[f].min(row.len());
+            if let Some(offset) = row[start..].iter().position(|b| !b.is_empty()) {
+                let h = start + offset;
+                self.min_h[f] = h;
+                self.len -= 1;
+                return Some((h as u32, row[h].pop().unwrap()));
+            }
+            self.min_h[f] = usize::MAX;
+            self.min_f += 1;
+        }
+    }
+}
 
 pub fn solve(board: &Board, opts: &Options) -> Outcome {
     let start_time = Instant::now();
@@ -113,7 +163,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
 
     let mut arena: Vec<Node> = Vec::new();
     let mut tt: FxHashMap<(Box<[u16]>, u16), u32> = FxHashMap::default();
-    let mut open: BinaryHeap<Entry> = BinaryHeap::new();
+    let mut open = BucketQueue::new();
     let mut freeze = FreezeChecker::new(board);
     let dead_sets = crate::deadsets::DeadSetTables::new(board, crate::deadsets::Direction::Forward);
     let mut corral = CorralAnalyzer::new(board);
@@ -149,11 +199,10 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
         Some(h) => h,
         None => return Outcome::Unsolvable { stats },
     };
-    let mut seq = 0u64;
-    open.push(Reverse((f_of(0, root_h as u32), root_h as u32, seq, NO_PARENT, 0, 0)));
+    open.push(f_of(0, root_h as u32), root_h as u32, (NO_PARENT, 0, 0));
 
     let mut pops = 0u64;
-    while let Some(Reverse((_, h, _, parent, box_from, dir))) = open.pop() {
+    while let Some((h, (parent, box_from, dir))) = open.pop() {
         pops += 1;
         if stats.expanded >= opts.max_nodes
             || (pops % 512 == 0 && (start_time.elapsed() > opts.time_limit || opts.stopped()))
@@ -306,8 +355,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                             freeze: &mut FreezeChecker,
                             matcher: &mut Matcher,
                             stats: &mut Stats,
-                            open: &mut BinaryHeap<Entry>,
-                            seq: &mut u64| {
+                            open: &mut BucketQueue| {
             let b = node_boxes[bi];
             let to = board.neighbors[b as usize][d];
             if to == NONE || box_at[to as usize] || board.dead[to as usize] {
@@ -353,30 +401,21 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                 stats.deadlocks += 1;
                 return;
             };
-            *seq += 1;
             stats.generated += 1;
-            // Newest-first tie-breaking (LIFO flavor keeps the search focused).
-            open.push(Reverse((
-                f_of(node.g + 1, h_child as u32),
-                h_child as u32,
-                u64::MAX - *seq,
-                node_idx,
-                b,
-                d as u8,
-            )));
+            open.push(f_of(node.g + 1, h_child as u32), h_child as u32, (node_idx, b, d as u8));
         };
         match candidates {
             Candidates::All => {
                 for bi in 0..node_boxes.len() {
                     for d in 0..4 {
-                        try_push(bi, d, &mut box_at, &mut freeze, &mut matcher, &mut stats, &mut open, &mut seq);
+                        try_push(bi, d, &mut box_at, &mut freeze, &mut matcher, &mut stats, &mut open);
                     }
                 }
             }
             Candidates::Restricted(pushes) => {
                 for (b, d) in pushes {
                     let bi = node_boxes.iter().position(|&x| x == b).unwrap();
-                    try_push(bi, d as usize, &mut box_at, &mut freeze, &mut matcher, &mut stats, &mut open, &mut seq);
+                    try_push(bi, d as usize, &mut box_at, &mut freeze, &mut matcher, &mut stats, &mut open);
                 }
             }
         }
@@ -409,7 +448,7 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
 
     let mut arena: Vec<Node> = Vec::new();
     let mut tt: FxHashMap<(Box<[u16]>, u16), u32> = FxHashMap::default();
-    let mut open: BinaryHeap<Entry> = BinaryHeap::new();
+    let mut open = BucketQueue::new();
     let mut matcher = Matcher::new();
 
     let mut box_at = vec![false; board.num_squares];
@@ -446,7 +485,6 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
     // One root per player region of the goal-filled board (the forward
     // solution's final player position is in one of them). Root entries
     // reuse the box_from field to carry the region's seed player square.
-    let mut seq = 0u64;
     {
         for &b in goal_boxes.iter() {
             box_at[b as usize] = true;
@@ -472,15 +510,8 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
                     }
                 }
             }
-            seq += 1;
-            open.push(Reverse((
-                f_of(0, root_h),
-                root_h,
-                u64::MAX - seq,
-                NO_PARENT,
-                sq, // seed player square for this region
-                0,
-            )));
+            // Root entries carry the region's seed player square in box_from.
+            open.push(f_of(0, root_h), root_h, (NO_PARENT, sq, 0));
         }
         for &b in goal_boxes.iter() {
             box_at[b as usize] = false;
@@ -488,7 +519,7 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
     }
 
     let mut pops = 0u64;
-    while let Some(Reverse((_, h, _, parent, box_from, dir))) = open.pop() {
+    while let Some((h, (parent, box_from, dir))) = open.pop() {
         pops += 1;
         if stats.expanded >= opts.max_nodes
             || (pops % 512 == 0 && (start_time.elapsed() > opts.time_limit || opts.stopped()))
@@ -636,16 +667,8 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
                     stats.deadlocks += 1;
                     continue;
                 };
-                seq += 1;
                 stats.generated += 1;
-                open.push(Reverse((
-                    f_of(node.g + 1, h_child as u32),
-                    h_child as u32,
-                    u64::MAX - seq,
-                    node_idx,
-                    b,
-                    d as u8,
-                )));
+                open.push(f_of(node.g + 1, h_child as u32), h_child as u32, (node_idx, b, d as u8));
             }
         }
     }
