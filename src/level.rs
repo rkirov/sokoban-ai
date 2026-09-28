@@ -18,10 +18,8 @@ pub struct Level {
     pub rows: Vec<Vec<u8>>,
 }
 
-/// Static, precomputed data for one level. Some precomputed tables (tunnel
-/// flags, per-square min goal distance, grid geometry) are not consumed by
-/// the current search but are kept for planned techniques (macro moves,
-/// packing plans) and debugging.
+/// Static, precomputed data for one level. A few fields (per-square min goal
+/// distance, grid geometry) are kept for diagnostics.
 #[allow(dead_code)]
 pub struct Board {
     pub name: String,
@@ -49,9 +47,9 @@ pub struct Board {
     /// Squares from which a box can never be pulled back to any start square:
     /// dead for the backward search.
     pub backward_dead: Vec<bool>,
-    /// tunnel[sq][dir]: pushing a box into `sq` moving in `dir` forces it onward:
-    /// sq is not a goal and the two squares orthogonal to `dir` are walls.
-    pub tunnel: Vec<[bool; 4]>,
+    /// forced[p][d]: a box pushed from `p` in direction `d` onto square
+    /// b = p+d must continue forward next (see `forced_pushes`).
+    pub forced: Vec<[bool; 4]>,
     pub start_boxes: Vec<u16>,
     pub start_player: u16,
     /// Non-identity board automorphisms: square-index permutations from the
@@ -295,20 +293,7 @@ impl Board {
             .map(|sq| start_dist.iter().all(|d| d[sq] == INF))
             .collect();
 
-        // Tunnel detection: entering `sq` moving in `dir`, with walls on both
-        // orthogonal sides and no goal here, the box must keep moving.
-        let mut tunnel = vec![[false; 4]; num_squares];
-        for sq in 0..num_squares {
-            if is_goal[sq] {
-                continue;
-            }
-            for d in 0..4 {
-                let (o1, o2) = if d < 2 { (2, 3) } else { (0, 1) };
-                if neighbors[sq][o1] == NONE && neighbors[sq][o2] == NONE {
-                    tunnel[sq][d] = true;
-                }
-            }
-        }
+        let forced = forced_pushes(num_squares, &neighbors, &is_goal);
 
         // Board automorphisms: dihedral transforms of the bounding rectangle
         // under which the playable-square set and the goal set are invariant.
@@ -363,10 +348,66 @@ impl Board {
             min_goal_dist,
             start_dist,
             backward_dead,
-            tunnel,
+            forced,
             start_boxes,
             start_player,
             automorphisms,
         })
     }
+}
+
+/// Gate pushes. A box pushed from p onto a non-goal square b (direction d)
+/// where, with only walls, removing b cuts p off from every other neighbour
+/// of b: the player (on p's side) can never reach b's other sides, so the
+/// box can never move sideways or back, and nothing beyond b can move while
+/// it stands there. The box must move again (b is not a goal), and only
+/// forward, so pushing it forward at once and replaying everything else
+/// afterwards reaches the same position at the same push count. Hence after
+/// such a push only the forward push of that box needs generating (and if
+/// it is blocked, the position is dead). This depends on the position alone
+/// — not on how it was reached — so it is safe with transposition tables
+/// and preserves push-optimality. (The weaker "walls on both sides of p"
+/// form reasons about the parent and is NOT safe that way; naive tunnel
+/// macros were unsound, see tests::tunnel_parking_is_required.)
+fn forced_pushes(n: usize, neighbors: &[[u16; 4]], is_goal: &[bool]) -> Vec<[bool; 4]> {
+    let mut forced = vec![[false; 4]; n];
+    let mut comp = vec![u32::MAX; n];
+    let mut stack: Vec<u16> = Vec::new();
+    for b in 0..n {
+        if is_goal[b] {
+            continue;
+        }
+        // Components of the floor with b removed.
+        comp.iter_mut().for_each(|c| *c = u32::MAX);
+        let mut next = 0;
+        for &start in neighbors[b].iter().filter(|&&s| s != NONE) {
+            if comp[start as usize] != u32::MAX {
+                continue;
+            }
+            comp[start as usize] = next;
+            stack.push(start);
+            while let Some(q) = stack.pop() {
+                for &nb in &neighbors[q as usize] {
+                    if nb != NONE && nb as usize != b && comp[nb as usize] == u32::MAX {
+                        comp[nb as usize] = next;
+                        stack.push(nb);
+                    }
+                }
+            }
+            next += 1;
+        }
+        for d in 0..4 {
+            let p = neighbors[b][OPP[d]];
+            if p == NONE {
+                continue;
+            }
+            let alone = neighbors[b]
+                .iter()
+                .all(|&other| other == NONE || other == p || comp[other as usize] != comp[p as usize]);
+            if alone {
+                forced[p as usize][d] = true;
+            }
+        }
+    }
+    forced
 }

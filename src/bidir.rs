@@ -75,6 +75,8 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
     let mut fwd = Side::new();
     let mut bwd = Side::new();
     let mut freeze = FreezeChecker::new(board);
+    let dead_sets = crate::deadsets::DeadSetTables::new(board, crate::deadsets::Direction::Forward);
+    let back_sets = crate::deadsets::DeadSetTables::new(board, crate::deadsets::Direction::Backward);
     let mut corral = CorralAnalyzer::new(board);
 
     // Shared scratch.
@@ -172,7 +174,6 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
 
     // Interleave: expand one node per side per round.
     let mut pops = 0u64;
-    let mut forward_turn = true;
     loop {
         pops += 1;
         if stats.expanded >= opts.max_nodes
@@ -189,8 +190,12 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
             stats.time = start_time.elapsed();
             return Outcome::Unsolvable { stats };
         }
-        let fwd_turn = forward_turn;
-        forward_turn = !forward_turn;
+        // Expand the side with the smaller frontier (Pohl's cardinality
+        // criterion): the sides meet with the least total work, and effort
+        // shifts to the more constrained direction on its own (cramped goal
+        // areas are easy backward). Measured against strict alternation:
+        // +6 SokHard levels.
+        let fwd_turn = fwd.open.len() <= bwd.open.len();
 
         let side = if fwd_turn { &mut fwd } else { &mut bwd };
         let Some(Reverse((_, h, _, parent, box_from, dir))) = side.open.pop() else {
@@ -381,7 +386,8 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                 }
                 box_at[b as usize] = false;
                 box_at[to as usize] = true;
-                let frozen_dead = freeze.is_freeze_deadlock(board, box_at, to);
+                let frozen_dead = freeze.is_freeze_deadlock(board, box_at, to)
+                    || dead_sets.moved_box_dead(node_boxes, bi, to, b);
                 let h_child = if frozen_dead {
                     None
                 } else {
@@ -479,6 +485,10 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                     }
                     let beyond = board.neighbors[to as usize][d];
                     if beyond == NONE || box_at[beyond as usize] {
+                        continue;
+                    }
+                    // Small box-set deadlocks for pull searches (see deadsets.rs).
+                    if back_sets.moved_box_dead(node_boxes, bi, to, beyond) {
                         continue;
                     }
                     bwd.matcher.restore();

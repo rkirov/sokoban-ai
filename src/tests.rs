@@ -231,3 +231,156 @@ fn verify_rejects_walks_into_ragged_row_void() {
     assert_eq!(crate::verify::verify_lurd(lvl, "LL"), Ok(2));
 }
 
+
+#[test]
+fn backward_search_on_symmetric_board() {
+    // Mirror-symmetric walls and goals, asymmetric start. The backward
+    // search's target is the start position, which automorphisms do not
+    // preserve, so it must not merge mirror-image states (it used to report
+    // this one-push level UNSOLVABLE).
+    let (lvl, b) = board(
+        "#########\n\
+         #@ $.   #\n\
+         #########",
+    );
+    assert!(!b.automorphisms.is_empty(), "test needs a symmetric board");
+    match crate::solver::solve_backward(&b, &Options::default()) {
+        Outcome::Solved { pushes, .. } => {
+            let moves = pushes_to_moves(&b, &pushes).expect("reconstruction");
+            assert_eq!(verify_lurd(&lvl, &moves), Ok(1));
+        }
+        _ => panic!("expected the backward search to solve it"),
+    }
+}
+
+/// Corral deadlock verdicts must be sound under the verdict cache: whenever
+/// the analyzer, used the way the search uses it (warm cache, only corrals
+/// adjacent to the last pushed box), reports a deadlock, a fresh analyzer
+/// examining every corral must prove the position dead too. Positions come
+/// from random push walks on real Microban levels. Keying the cache by
+/// (corral boxes, player region) alone breaks this: one fence can enclose
+/// several regions with different verdicts, so a verdict proven for one
+/// region was reused for another (first unconfirmed claim: Microban III #7,
+/// a position that happens to be dead anyway — the property is what this
+/// test pins, independent of luck).
+#[test]
+fn corral_deadlock_verdicts_survive_the_cache() {
+    use crate::corral::{CorralAnalyzer, CorralResult};
+    use crate::deadlock::FreezeChecker;
+    use crate::level::{NONE, OPP};
+
+    let mut rng = 0x2545_f491_4f6c_dd1du64;
+    let mut next = move |n: usize| {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        (rng % n as u64) as usize
+    };
+
+    let mut deadlocks = 0;
+    for file in ["levels/microban2.txt", "levels/microban3.txt"] {
+        let text = std::fs::read_to_string(file).unwrap();
+        for (li, lvl) in parse_collection(&text).iter().enumerate() {
+            let b = Board::from_level(lvl).unwrap();
+            let equal = b.goals.len() == b.start_boxes.len();
+            let mut warm = CorralAnalyzer::new(&b);
+            let mut freeze = FreezeChecker::new(&b);
+            let mut boxes = b.start_boxes.clone();
+            let mut player = b.start_player;
+            let mut focus = None;
+            for step in 0..300 {
+                if step % 30 == 0 {
+                    boxes = b.start_boxes.clone();
+                    player = b.start_player;
+                    focus = None;
+                }
+                let mut box_at = vec![false; b.num_squares];
+                for &x in &boxes {
+                    box_at[x as usize] = true;
+                }
+                let mut reach = vec![false; b.num_squares];
+                let mut stack = vec![player];
+                reach[player as usize] = true;
+                while let Some(s) = stack.pop() {
+                    for &n in &b.neighbors[s as usize] {
+                        if n != NONE && !reach[n as usize] && !box_at[n as usize] {
+                            reach[n as usize] = true;
+                            stack.push(n);
+                        }
+                    }
+                }
+
+                if warm.mini_budget() > 10_000 {
+                    let w = warm.analyze(&b, &box_at, |s| reach[s as usize], player, &mut freeze, equal, focus);
+                    if matches!(w, CorralResult::Deadlock) {
+                        deadlocks += 1;
+                        let mut cold = CorralAnalyzer::new(&b);
+                        let c = cold.analyze(&b, &box_at, |s| reach[s as usize], player, &mut freeze, equal, None);
+                        assert!(
+                            matches!(c, CorralResult::Deadlock),
+                            "{file} level {} step {step}: cached deadlock not confirmed",
+                            li + 1
+                        );
+                    }
+                }
+
+                // Random legal push onto a live square.
+                let mut pushes = Vec::new();
+                for (i, &x) in boxes.iter().enumerate() {
+                    for d in 0..4 {
+                        let to = b.neighbors[x as usize][d];
+                        let from = b.neighbors[x as usize][OPP[d]];
+                        if to != NONE && from != NONE && !box_at[to as usize] && !b.dead[to as usize] && reach[from as usize] {
+                            pushes.push((i, to, x));
+                        }
+                    }
+                }
+                if pushes.is_empty() {
+                    boxes = b.start_boxes.clone();
+                    player = b.start_player;
+                    focus = None;
+                    continue;
+                }
+                let (i, to, from) = pushes[next(pushes.len())];
+                boxes[i] = to;
+                player = from;
+                focus = Some(to);
+            }
+        }
+    }
+    assert!(deadlocks > 100, "only {deadlocks} deadlock verdicts exercised");
+}
+
+#[test]
+fn frozen_walls_seal_goals_behind_them() {
+    use crate::deadlock::FrozenWalls;
+    use crate::level::INF;
+    // One-wide corridor: goals at x=1 and x=2, box start x=5.
+    let (_, b) = board("########\n#.*  $@#\n########");
+    let sq = |x: usize| b.sq_index[b.width + x];
+    let mut fw = FrozenWalls::new(&b);
+    let open = fw.distances(&b, &[]);
+    assert_eq!(*open, b.goal_dist, "no walls = the board's own tables");
+    let deep = b.goals.iter().position(|&g| g == sq(1)).unwrap();
+    assert_ne!(open[deep][sq(5) as usize], INF);
+    let walled = fw.distances(&b, &[sq(2)]);
+    assert_eq!(walled[deep][sq(5) as usize], INF, "a frozen box on x=2 seals x=1");
+}
+
+#[test]
+fn gate_pushes_are_forced_only_through_articulation_squares() {
+    // A one-wide passage between two rooms: pushing a box from the left
+    // room into the passage entrance (a gate square) forces it onward.
+    let (_, b) = board(
+        "#########\n\
+         #   #   #\n\
+         # @$  . #\n\
+         #   #   #\n\
+         #########",
+    );
+    let sq = |x: usize, y: usize| b.sq_index[y * b.width + x] as usize;
+    let right = 3; // DIRS index for +x
+    assert!(b.forced[sq(3, 2)][right], "(3,2)->(4,2): (4,2) is the only link between the rooms");
+    // Inside an open room nothing is forced.
+    assert!(!b.forced[sq(1, 2)][right]);
+}

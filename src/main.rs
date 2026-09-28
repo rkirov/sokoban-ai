@@ -1,9 +1,14 @@
 mod bidir;
 mod corral;
 mod deadlock;
+mod deadsets;
 mod fess;
+mod hotspots;
 mod level;
+mod macros;
 mod matching;
+mod packing;
+mod retro;
 mod solver;
 #[cfg(test)]
 mod tests;
@@ -13,89 +18,232 @@ use level::Board;
 use solver::{Mode, Options, Outcome};
 use std::time::Duration;
 
-/// Racing portfolio (Sokolution-style): forward push-optimal A*, backward
-/// pull search, weighted forward A*, and feature-space search (FESS-lite)
-/// each run in their own thread with the FULL time budget; the first thread
-/// to reach a definite answer (solution, or exhaustion of its complete
-/// search space = unsolvability proof) stops the others. Returns the outcome
-/// and which strategy produced it; forward-optimal wins ties so reported
-/// solutions are push-optimal whenever that search finished in time.
-fn solve_auto(board: &Board, base: &Options) -> (Outcome, &'static str) {
-    use std::sync::atomic::Ordering;
-    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let mk = |mode: Mode| Options {
-        mode,
-        max_nodes: base.max_nodes,
-        time_limit: base.time_limit,
-        corral: base.corral,
-        stop: stop.clone(),
-    };
-    let finishing = |outcome: Outcome, opts: &Options| -> Outcome {
-        if !matches!(outcome, Outcome::Exhausted { .. }) {
-            opts.stop.store(true, Ordering::Relaxed);
-        }
-        outcome
-    };
+/// One thread of the racing portfolio. The default portfolio was chosen by
+/// measuring each strategy's unique solves at 10 s/level: optimal A* (also
+/// gives push-optimal answers), bidirectional search, FESS (large levels)
+/// and backward search (cramped goal areas). Weighted A* and the second FESS
+/// variant solved fewer levels the others miss, so they are opt-in.
+#[derive(Clone, Copy)]
+enum Strategy {
+    /// Forward push-optimal A*.
+    Optimal,
+    /// Bidirectional meet-in-the-middle: g+h for half the budget, then g+2h
+    /// (different orderings crack different levels).
+    Bidir,
+    /// Weighted A*: w=3 for half the budget, then w=5.
+    Weighted,
+    /// Backward (pull) A* from the goal: cramped goal areas are easy
+    /// backward.
+    Backward,
+    /// Feature-space search over macro moves.
+    Fess(fess::Config),
+}
 
-    let (fwd, bwd, weighted, fess_out) = std::thread::scope(|s| {
-        let o1 = mk(Mode::OptimalPushes);
-        let o2 = mk(Mode::OptimalPushes);
-        let mut o3a = mk(Mode::Weighted(3));
-        o3a.time_limit = base.time_limit.mul_f64(0.5);
-        let mut o3b = mk(Mode::Weighted(5));
-        o3b.time_limit = base.time_limit.mul_f64(0.5);
-        let o4 = mk(Mode::Greedy);
-        let t1 = s.spawn(move || finishing(solver::solve(board, &o1), &o1));
-        // Bidirectional meet-in-the-middle subsumes the plain backward
-        // search (its backward half IS one) and adds forward meets. Like the
-        // weighted slot, two orderings crack different levels: g+h for half
-        // the budget, then g+2h.
-        let mut o2a = o2.clone();
-        o2a.time_limit = base.time_limit.mul_f64(0.5);
-        let mut o2b = mk(Mode::Weighted(2));
-        o2b.time_limit = base.time_limit.mul_f64(0.5);
-        let t2 = s.spawn(move || match bidir::solve(board, &o2a) {
-            Outcome::Exhausted { .. } => finishing(bidir::solve(board, &o2b), &o2b),
-            other => finishing(other, &o2a),
-        });
-        // Weighted slot: w=3 for half the budget, then w=5 — different
-        // weights crack different levels.
-        let t3 = s.spawn(move || match solver::solve(board, &o3a) {
-            Outcome::Exhausted { .. } => finishing(solver::solve(board, &o3b), &o3b),
-            other => finishing(other, &o3a),
-        });
-        let t4 = s.spawn(move || finishing(fess::solve(board, &o4), &o4));
-        (t1.join().unwrap(), t2.join().unwrap(), t3.join().unwrap(), t4.join().unwrap())
+impl Strategy {
+    const DEFAULT: [Strategy; 4] =
+        [Strategy::Optimal, Strategy::Bidir, Strategy::Fess(fess::Config::DEFAULT), Strategy::Backward];
+
+    fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "optimal" => Strategy::Optimal,
+            "bidir" => Strategy::Bidir,
+            "weighted" => Strategy::Weighted,
+            "backward" => Strategy::Backward,
+            "fess" => Strategy::Fess(fess::Config::DEFAULT),
+            "fess-far" => Strategy::Fess(fess::Config::FAR),
+            _ => return None,
+        })
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Strategy::Optimal => "fwd-optimal",
+            Strategy::Bidir => "bidir",
+            Strategy::Weighted => "weighted",
+            Strategy::Backward => "backward",
+            Strategy::Fess(c) if c.removal_distance > 0 => "fess-far",
+            Strategy::Fess(_) => "fess",
+        }
+    }
+
+    fn run(&self, board: &Board, opts: &Options) -> Outcome {
+        // Two stages, each with half the budget; the second runs only if the
+        // first ran out without an answer.
+        let staged = |first: Mode, second: Mode, search: fn(&Board, &Options) -> Outcome| {
+            let half = Options { mode: first, time_limit: opts.time_limit.mul_f64(0.5), ..opts.clone() };
+            match search(board, &half) {
+                Outcome::Exhausted { .. } => search(board, &Options { mode: second, ..half }),
+                other => other,
+            }
+        };
+        match self {
+            Strategy::Optimal => solver::solve(board, &Options { mode: Mode::OptimalPushes, ..opts.clone() }),
+            Strategy::Bidir => staged(Mode::OptimalPushes, Mode::Weighted(2), bidir::solve),
+            Strategy::Weighted => staged(Mode::Weighted(3), Mode::Weighted(5), solver::solve),
+            Strategy::Backward => solver::solve_backward(board, &Options { mode: Mode::OptimalPushes, ..opts.clone() }),
+            Strategy::Fess(config) => fess::solve(board, opts, config),
+        }
+    }
+}
+
+/// Racing portfolio (Sokolution-style): every strategy runs in its own
+/// thread with the FULL time budget; the first SOLUTION stops the others.
+/// Returns the outcome and which strategy produced it; earlier strategies
+/// win ties, so with forward-optimal first, reported solutions are
+/// push-optimal whenever it finished in time.
+///
+/// An "unsolvable" verdict (a strategy exhausted its search space) only ends
+/// that strategy's thread: solutions are verified by replay, verdicts are
+/// not, so one unsound strategy must not be able to stop the rest (a buggy
+/// deadlock table once made every level of a benchmark "unsolvable" this
+/// way). A solution found after another thread claimed "unsolvable" proves
+/// a soundness bug and is reported loudly.
+fn solve_auto(board: &Board, base: &Options, strategies: &[Strategy]) -> (Outcome, &'static str) {
+    use std::sync::atomic::Ordering;
+    let outcomes: Vec<Outcome> = std::thread::scope(|s| {
+        let threads: Vec<_> = strategies
+            .iter()
+            .map(|strategy| {
+                let opts = base.clone();
+                s.spawn(move || {
+                    let outcome = strategy.run(board, &opts);
+                    if matches!(outcome, Outcome::Solved { .. }) {
+                        opts.stop.store(true, Ordering::Relaxed);
+                    }
+                    outcome
+                })
+            })
+            .collect();
+        threads.into_iter().map(|t| t.join().unwrap()).collect()
     });
 
-    let results = [
-        (fwd, "fwd-optimal"),
-        (bwd, "bidir"),
-        (weighted, "weighted"),
-        (fess_out, "fess"),
-    ];
-    let mut solved = None;
-    let mut unsolvable = None;
-    let mut exhausted = None;
-    for (outcome, tag) in results {
-        match outcome {
-            o @ Outcome::Solved { .. } => solved.get_or_insert((o, tag)),
-            o @ Outcome::Unsolvable { .. } => unsolvable.get_or_insert((o, tag)),
-            o @ Outcome::Exhausted { .. } => exhausted.get_or_insert((o, tag)),
-        };
+    if outcomes.iter().any(|o| matches!(o, Outcome::Solved { .. })) {
+        for (o, strategy) in outcomes.iter().zip(strategies) {
+            if matches!(o, Outcome::Unsolvable { .. }) {
+                eprintln!(
+                    "WARNING: {} claimed {} unsolvable but another strategy solved it: soundness bug",
+                    strategy.name(),
+                    board.name
+                );
+            }
+        }
     }
-    solved
-        .or(unsolvable)
-        .or(exhausted)
-        .expect("at least one strategy result")
+    let rank = |o: &Outcome| match o {
+        Outcome::Solved { .. } => 0,
+        Outcome::Unsolvable { .. } => 1,
+        Outcome::Exhausted { .. } => 2,
+    };
+    outcomes
+        .into_iter()
+        .zip(strategies.iter().map(Strategy::name))
+        .min_by_key(|(o, _)| rank(o))
+        .expect("at least one strategy")
+}
+
+/// Memory watchdog: runs `solve` while a background thread polls the
+/// process's resident memory; past `limit_bytes` it raises `stop`, which
+/// every search checks periodically, so an over-budget search ends as
+/// "exhausted" instead of exhausting the machine.
+fn with_memory_limit<T: Send>(
+    limit_bytes: u64,
+    stop: &std::sync::atomic::AtomicBool,
+    solve: impl FnOnce() -> T + Send,
+) -> T {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let done = AtomicBool::new(false);
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            while !done.load(Ordering::Relaxed) {
+                if resident_bytes().is_some_and(|rss| rss > limit_bytes) {
+                    stop.store(true, Ordering::Relaxed);
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let result = solve();
+        done.store(true, Ordering::Relaxed);
+        result
+    })
+}
+
+/// Resident memory of this process (Linux /proc; None elsewhere).
+fn resident_bytes() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    kb_field(&status, "VmRSS:").map(|kb| kb * 1024)
+}
+
+/// Default memory limit: half of physical RAM (unlimited if unknown).
+fn default_memory_limit() -> u64 {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|m| kb_field(&m, "MemTotal:"))
+        .map_or(u64::MAX, |kb| kb * 1024 / 2)
+}
+
+fn kb_field(text: &str, name: &str) -> Option<u64> {
+    let line = text.lines().find(|l| l.starts_with(name))?;
+    line[name.len()..].trim().trim_end_matches("kB").trim().parse().ok()
+}
+
+/// Diagnostic: the level map with each goal replaced by its packing layer
+/// (0 = fill first; letters after 9).
+fn print_plan(board: &Board) {
+    let t = std::time::Instant::now();
+    let plan = packing::PackingPlan::compute(board);
+    let elapsed = t.elapsed();
+    let t = std::time::Instant::now();
+    let _ = deadsets::DeadSetTables::new(board, deadsets::Direction::Forward);
+    println!("dead-set tables: {:.1?}", t.elapsed());
+    let t = std::time::Instant::now();
+    let relaxed = retro::RelaxedPlan::compute(board, 20_000, 0);
+    match &relaxed {
+        Some(r) => {
+            let parks = r.steps.iter().filter(|s| s.from.is_some()).count();
+            println!("relaxed plan: {} steps ({} moves of placed boxes) in {:.1?}", r.steps.len(), parks, t.elapsed());
+        }
+        None => println!("relaxed plan: none within budget ({:.1?})", t.elapsed()),
+    }
+    println!(
+        "{}: {} layers {:?}, exact tables {:?} ({elapsed:.1?})",
+        board.name,
+        plan.num_layers(),
+        plan.sizes,
+        plan.table_sizes()
+    );
+    for y in 0..board.height {
+        let row: String = (0..board.width)
+            .map(|x| {
+                let sq = board.sq_index[y * board.width + x];
+                if sq == level::NONE {
+                    return '#';
+                }
+                let s = sq as usize;
+                if board.is_goal[s] {
+                    let l = plan.layer[s] as u32;
+                    return std::char::from_digit(l.min(35), 36).unwrap();
+                }
+                if board.start_boxes.contains(&sq) {
+                    '$'
+                } else if sq == board.start_player {
+                    '@'
+                } else {
+                    ' '
+                }
+            })
+            .collect();
+        println!("{row}");
+    }
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
         eprintln!(
-            "usage: sokoban-solver <levels.txt> [--level N] [--mode optimal|greedy|weighted:W] \
-             [--time-limit SECS] [--max-nodes N] [--solutions FILE] [--quiet]"
+            "usage: sokoban-solver <levels.txt> [--level N] [--time-limit SECS]\n\
+             \x20 [--portfolio optimal,bidir,weighted,backward,fess,fess-far]   (default: optimal,bidir,fess,backward)\n\
+             \x20 [--mode auto|optimal|greedy|weighted:W|backward|bidir|fess]\n\
+             \x20 [--memory-limit GB]   (default: half of RAM)  [--max-nodes N] [--no-corral]\n\
+             \x20 [--solutions FILE] [--quiet] [--show-plan]"
         );
         std::process::exit(2);
     }
@@ -109,6 +257,9 @@ fn main() {
     let mut backward = false;
     let mut fess_mode = false;
     let mut bidir_mode = false;
+    let mut show_plan = false;
+    let mut portfolio: Vec<Strategy> = Strategy::DEFAULT.to_vec();
+    let mut memory_limit = default_memory_limit();
 
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -154,6 +305,18 @@ fn main() {
             "--solutions" => solutions_path = Some(it.next().expect("--solutions FILE").clone()),
             "--no-corral" => opts.corral = false,
             "--quiet" => quiet = true,
+            "--memory-limit" => {
+                let gb: f64 = it.next().expect("--memory-limit GB").parse().expect("gigabytes");
+                memory_limit = (gb * 1e9) as u64;
+            }
+            "--show-plan" => show_plan = true,
+            "--portfolio" => {
+                let list = it.next().expect("--portfolio a,b,...");
+                portfolio = list
+                    .split(',')
+                    .map(|n| Strategy::parse(n).unwrap_or_else(|| panic!("unknown strategy {n}")))
+                    .collect();
+            }
             _ if file.is_none() => file = Some(arg.clone()),
             _ => panic!("unexpected argument {arg}"),
         }
@@ -189,17 +352,24 @@ fn main() {
                 continue;
             }
         };
-        let (outcome, tag) = if auto {
-            solve_auto(&board, &opts)
-        } else if backward {
-            (solver::solve_backward(&board, &opts), "backward")
-        } else if fess_mode {
-            (fess::solve(&board, &opts), "fess")
-        } else if bidir_mode {
-            (bidir::solve(&board, &opts), "bidir")
-        } else {
-            (solver::solve(&board, &opts), "single")
-        };
+        if show_plan {
+            print_plan(&board);
+            continue;
+        }
+        opts.stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (outcome, tag) = with_memory_limit(memory_limit, &opts.stop, || {
+            if auto {
+                solve_auto(&board, &opts, &portfolio)
+            } else if backward {
+                (solver::solve_backward(&board, &opts), "backward")
+            } else if fess_mode {
+                (fess::solve(&board, &opts, &fess::Config::DEFAULT), "fess")
+            } else if bidir_mode {
+                (bidir::solve(&board, &opts), "bidir")
+            } else {
+                (solver::solve(&board, &opts), "single")
+            }
+        });
         match outcome {
             Outcome::Solved { pushes, stats } => {
                 let moves = verify::pushes_to_moves(&board, &pushes)

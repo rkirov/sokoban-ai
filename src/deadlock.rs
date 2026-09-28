@@ -15,7 +15,7 @@
 //! A box blocked along both axes is frozen. A frozen box off a goal square is
 //! a deadlock.
 
-use crate::level::{Board, NONE};
+use crate::level::{Board, INF, NONE};
 
 pub struct FreezeChecker {
     /// Squares treated as walls on the current recursion path.
@@ -115,5 +115,78 @@ impl FreezeChecker {
             }
         }
         false
+    }
+}
+
+/// Push-distance tables with boxes frozen on goals treated as walls.
+///
+/// A box frozen on a goal can never move again, so for every other box it
+/// is a wall. Recomputing the relaxed push distances with those walls is
+/// exact-er than the empty-board tables: a dense goal area whose frozen
+/// boxes seal the route to a remaining goal makes that goal unreachable,
+/// and the matching check then proves the position dead (the typical way a
+/// search packs all but one box and stalls). Frozen sets repeat heavily
+/// along a search, so tables are cached per set.
+pub struct FrozenWalls {
+    cache: rustc_hash::FxHashMap<Box<[u16]>, std::rc::Rc<Vec<Vec<u32>>>>,
+    wall: Vec<bool>,
+    queue: Vec<u16>,
+}
+
+/// Cache entries kept before the cache is cleared.
+const MAX_WALL_TABLES: usize = 4096;
+
+impl FrozenWalls {
+    pub fn new(board: &Board) -> Self {
+        FrozenWalls { cache: Default::default(), wall: vec![false; board.num_squares], queue: Vec::new() }
+    }
+
+    /// dist[j][sq]: relaxed push distance from sq to goal j with the squares
+    /// in `frozen` (sorted) as walls; INF where unreachable. A goal holding a
+    /// frozen box is itself a wall (its row is handled by the caller).
+    pub fn distances(&mut self, board: &Board, frozen: &[u16]) -> std::rc::Rc<Vec<Vec<u32>>> {
+        if let Some(t) = self.cache.get(frozen) {
+            return t.clone();
+        }
+        if self.cache.len() >= MAX_WALL_TABLES {
+            self.cache.clear();
+        }
+        for &f in frozen {
+            self.wall[f as usize] = true;
+        }
+        let n = board.num_squares;
+        let mut tables = Vec::with_capacity(board.goals.len());
+        for &g in &board.goals {
+            let mut dist = vec![INF; n];
+            if !self.wall[g as usize] {
+                dist[g as usize] = 0;
+                self.queue.clear();
+                self.queue.push(g);
+                let mut head = 0;
+                while head < self.queue.len() {
+                    let q = self.queue[head];
+                    head += 1;
+                    for d in 0..4 {
+                        let next = board.neighbors[q as usize][d];
+                        if next == NONE || self.wall[next as usize] || dist[next as usize] != INF {
+                            continue;
+                        }
+                        let beyond = board.neighbors[next as usize][d];
+                        if beyond == NONE || self.wall[beyond as usize] {
+                            continue;
+                        }
+                        dist[next as usize] = dist[q as usize] + 1;
+                        self.queue.push(next);
+                    }
+                }
+            }
+            tables.push(dist);
+        }
+        for &f in frozen {
+            self.wall[f as usize] = false;
+        }
+        let tables = std::rc::Rc::new(tables);
+        self.cache.insert(frozen.into(), tables.clone());
+        tables
     }
 }

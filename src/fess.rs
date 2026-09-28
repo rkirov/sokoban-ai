@@ -1,413 +1,483 @@
-//! FESS-lite: feature-space search after Shoham & Schaeffer's FESS algorithm
-//! (Festival solver, IEEE CoG 2020), simplified to unit pushes.
+//! Feature-space search (after Shoham & Schaeffer's FESS, Festival) over
+//! macro moves, guided by a packing plan.
 //!
-//! The search tree lives in domain space; every node projects onto a cell in
-//! a small feature space — here 2-D: (boxes on goals, player connectivity =
-//! number of player-disconnected regions). The search cycles over active
-//! cells, expanding exactly ONE pending move (the least accumulated weight)
-//! per cell visit. Moves suggested by advisors (a move that packs a box, a
-//! move that improves connectivity) get weight 0, all others weight 1, so
-//! accumulated weight counts the "difficult" moves on a line and the search
-//! effectively iterates over solutions with 0, 1, 2, ... difficult moves.
-//! A child whose features are worse than its parent's cell stays associated
-//! with the parent's cell (with its larger weight) instead of spawning an
-//! ever-worse cell that would steal expansion cycles.
+//! Why: best-first searches order positions by an estimate of remaining
+//! work, which is uninformative for rearrangement puzzles (a correct plan
+//! often makes the estimate worse first). FESS instead projects every
+//! position onto a small feature space — here (boxes packed in plan order,
+//! number of free-space regions) — and cycles over the occupied feature
+//! cells, expanding one move per cell per visit. Progress in any feature
+//! opens a new cell that gets its own share of effort, so the search
+//! cannot drown in one region of the state space.
 //!
-//! No admissible heuristic is needed; the matching lower bound is used only
-//! as an in-cell tie-break and for its deadlock (infeasibility) signal.
-//! Deadlock pruning (dead squares, freeze, PI-corral) is shared with the
-//! forward A* solver, so completeness within the explored budget matches it.
+//! Within a cell, moves are taken by accumulated weight: moves suggested by
+//! an advisor (the best move that packs a box, the best move that merges
+//! free regions, the best move that reduces the number of boxes standing in
+//! other boxes' way — see hotspots.rs) cost 0, others 1. Accumulated weight counts the "unadvised"
+//! moves on a line, so lines that follow advice are tried first.
+//!
+//! A child that is worse than its parent's cell stays in the parent's cell
+//! (with its larger weight) instead of opening a worse cell that would take
+//! a share of the effort.
+//!
+//! "Packed" comes from the goal-filling order (packing.rs); for levels whose
+//! relaxed backward plan needs parking (a box placed and moved again), the
+//! order cannot express that, so progress along that plan (retro.rs) is used
+//! instead.
+//!
+//! Moves are macro moves (one box, any number of pushes; see macros.rs), so
+//! the depth of a solution is its number of box moves, not pushes.
+//!
+//! Completeness: every generated move is eventually expanded unless it
+//! leads to a proven deadlock or an already-expanded position, so an empty
+//! queue proves the level unsolvable. The plan and advisors only order work.
 
 use crate::corral::{CorralAnalyzer, CorralResult};
 use crate::deadlock::FreezeChecker;
-use crate::level::{Board, INF, NONE, OPP};
+use crate::hotspots::Hotspots;
+use crate::level::{Board, INF, NONE};
+use crate::macros::{Macro, MacroGen, Regions};
 use crate::matching::Matcher;
+use crate::packing::PackingPlan;
+use crate::retro::RelaxedPlan;
 use crate::solver::{Options, Outcome, Stats};
 use rustc_hash::FxHashMap;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::time::Instant;
 
-type Cell = (u8, u8); // (packed boxes, connectivity)
+/// Feature cell: (packed boxes, free-space regions).
+type Cell = (u32, u32);
 
-struct FNode {
+/// Lexicographic feature order: more packed boxes, then fewer regions.
+fn better(a: Cell, b: Cell) -> bool {
+    a.0 > b.0 || (a.0 == b.0 && a.1 < b.1)
+}
+
+struct Node {
     boxes: Box<[u16]>,
-    #[allow(dead_code)]
+    /// Actual player square (after the move that produced this node).
     player: u16,
+    parent: u32,
+    /// The move from the parent: index into parent's boxes, destination.
+    box_idx: u16,
+    to: u16,
     weight: u32,
     cell: Cell,
-    parent: u32,
-    push_box_from: u16,
-    push_dir: u8,
 }
 
 const NO_PARENT: u32 = u32::MAX;
 
-/// Pending move: (weight, matching-h tie-break, seq, parent node, box, dir).
-type PendingMove = Reverse<(u32, u32, u64, u32, u16, u8)>;
-
-/// Lexicographic feature ordering: more packed boxes first, then fewer
-/// player regions. "Worse" children project onto their parent's cell.
-fn better_or_equal(a: Cell, b: Cell) -> bool {
-    a.0 > b.0 || (a.0 == b.0 && a.1 <= b.1)
+/// Pending move, min-heap order: accumulated weight, then the child's
+/// features (more packed, fewer regions), then its distance sum, then
+/// newest first.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Pending {
+    weight: u32,
+    unpacked: u32,
+    regions: u32,
+    hotspots: u32,
+    dist: u32,
+    newest: Reverse<u64>,
+    parent: u32,
+    box_idx: u16,
+    to: u16,
+    player: u16,
 }
 
-pub fn solve(board: &Board, opts: &Options) -> Outcome {
+/// Per-thread cap on queued moves (~40 bytes each), so long runs degrade to
+/// "exhausted" instead of exhausting memory.
+const MAX_PENDING: usize = 20_000_000;
+
+/// FESS variants (portfolio diversity).
+#[derive(Clone, Copy)]
+pub struct Config {
+    /// Relaxed plan removals only at start squares at least this far (in
+    /// steps) from every goal; see retro.rs.
+    pub removal_distance: u32,
+}
+
+impl Config {
+    pub const DEFAULT: Config = Config { removal_distance: 0 };
+    /// Plans that fetch boxes from farther away: different plans solve
+    /// different levels (opt-in second FESS thread, `--portfolio fess-far`).
+    pub const FAR: Config = Config { removal_distance: 6 };
+}
+
+pub fn solve(board: &Board, opts: &Options, config: &Config) -> Outcome {
     let start_time = Instant::now();
     let mut stats = Stats::default();
+    let plan = PackingPlan::compute(board);
+    let relaxed = RelaxedPlan::compute(board, 20_000, config.removal_distance).filter(|r| r.has_parking());
+    let hotspots = Hotspots::compute(board);
+    let packed = |boxes: &[u16]| match &relaxed {
+        Some(r) => r.progress(boxes),
+        None => plan.packed(boxes),
+    };
 
-    let mut arena: Vec<FNode> = Vec::new();
-    let mut tt: FxHashMap<(Box<[u16]>, u16), ()> = FxHashMap::default();
-    let mut cells: FxHashMap<Cell, BinaryHeap<PendingMove>> = FxHashMap::default();
+    let mut arena: Vec<Node> = Vec::new();
+    let mut expanded: FxHashMap<(Box<[u16]>, u16), ()> = FxHashMap::default();
+    let mut cells: FxHashMap<Cell, BinaryHeap<Reverse<Pending>>> = FxHashMap::default();
     let mut rotation: Vec<Cell> = Vec::new();
     let mut cursor = 0usize;
+    let mut pending = 0usize;
+    // Best cell reached, for FESS_DEBUG diagnostics on give-up.
+    let mut best_cell: Cell = (0, u32::MAX);
+    let mut seq = 0u64;
 
     let mut freeze = FreezeChecker::new(board);
+    let dead_sets = crate::deadsets::DeadSetTables::new(board, crate::deadsets::Direction::Forward);
     let mut corral = CorralAnalyzer::new(board);
     let mut matcher = Matcher::new();
+    let mut macro_gen = MacroGen::new(board);
+    let mut regions = RegionCounter::new(board);
     let equal_goals_boxes = board.goals.len() == board.start_boxes.len();
 
     let mut box_at = vec![false; board.num_squares];
-    let mut box_list: Vec<u16> = Vec::new();
-    let mut reach_stamp = vec![0u32; board.num_squares];
+    let mut reach = vec![0u32; board.num_squares];
     let mut reach_gen = 0u32;
-    let mut bfs_queue: Vec<u16> = Vec::with_capacity(board.num_squares);
-    // Separate stamps for connectivity floods so they never clobber the
-    // player-reachability stamps consulted by later candidates.
-    let mut conn_stamp = vec![0u32; board.num_squares];
-    let mut conn_gen = 0u32;
-    let mut conn_queue: Vec<u16> = Vec::with_capacity(board.num_squares);
+    let mut reach_list: Vec<u16> = Vec::new();
     let mut frozen_flags: Vec<bool> = Vec::new();
-    let mut seq = 0u64;
+    let mut frozen_squares: Vec<u16> = Vec::new();
+    let mut frozen_walls = crate::deadlock::FrozenWalls::new(board);
+    let mut moves: Vec<Macro> = Vec::new();
 
-    // Seed with a virtual root entry; the expansion loop materializes it.
-    let mut root_heap = BinaryHeap::new();
-    root_heap.push(Reverse((0u32, 0u32, 0u64, NO_PARENT, 0u16, 0u8)));
-    let root_cell: Cell = (u8::MAX, u8::MAX); // placeholder, replaced on pop
-    cells.insert(root_cell, root_heap);
-    rotation.push(root_cell);
+    // The root is expanded directly; everything after comes off the queues.
+    let mut next: Option<Pending> = Some(Pending {
+        weight: 0,
+        unpacked: 0,
+        regions: 0,
+        hotspots: 0,
+        dist: 0,
+        newest: Reverse(0),
+        parent: NO_PARENT,
+        box_idx: 0,
+        to: 0,
+        player: board.start_player,
+    });
 
-    let mut pops = 0u64;
     loop {
-        if rotation.is_empty() {
-            stats.time = start_time.elapsed();
-            return Outcome::Unsolvable { stats };
-        }
-        // Cyclic scan: one move per active cell per round.
-        cursor %= rotation.len();
-        let cell_key = rotation[cursor];
-        let Some(heap) = cells.get_mut(&cell_key) else {
-            rotation.swap_remove(cursor);
-            continue;
+        let entry = match next.take() {
+            Some(e) => e,
+            None => {
+                if start_time.elapsed() > opts.time_limit
+                    || opts.stopped()
+                    || stats.expanded >= opts.max_nodes
+                    || pending > MAX_PENDING
+                {
+                    stats.time = start_time.elapsed();
+                    if std::env::var_os("FESS_DEBUG").is_some() {
+                        eprintln!(
+                            "fess: best cell (packed {}, regions {}) of {} boxes; {} cells",
+                            best_cell.0,
+                            best_cell.1,
+                            board.start_boxes.len(),
+                            rotation.len()
+                        );
+                    }
+                    return Outcome::Exhausted { stats };
+                }
+                // Cyclic scan: one move from the next active cell.
+                let Some(e) = pop_cyclic(&mut cells, &mut rotation, &mut cursor) else {
+                    stats.time = start_time.elapsed();
+                    return Outcome::Unsolvable { stats };
+                };
+                pending -= 1;
+                e
+            }
         };
-        let Some(Reverse((weight, _, _, parent, box_from, dir))) = heap.pop() else {
-            cells.remove(&cell_key);
-            rotation.swap_remove(cursor);
-            continue;
-        };
-        cursor += 1;
 
-        pops += 1;
-        if stats.expanded >= opts.max_nodes
-            || (pops % 256 == 0 && (start_time.elapsed() > opts.time_limit || opts.stopped()))
-        {
-            stats.time = start_time.elapsed();
-            return Outcome::Exhausted { stats };
-        }
-
-        // Materialize the child state.
-        let (boxes, player, weight) = if parent == NO_PARENT {
-            (board.start_boxes.clone().into_boxed_slice(), board.start_player, 0)
+        // Materialize the position.
+        let (boxes, weight, parent_cell) = if entry.parent == NO_PARENT {
+            (board.start_boxes.clone().into_boxed_slice(), 0, None)
         } else {
-            let p = &arena[parent as usize];
-            let to = board.neighbors[box_from as usize][dir as usize];
+            let p = &arena[entry.parent as usize];
             let mut boxes = p.boxes.clone();
-            let idx = boxes.iter().position(|&b| b == box_from).unwrap();
-            boxes[idx] = to;
+            boxes[entry.box_idx as usize] = entry.to;
             boxes.sort_unstable();
-            (boxes, box_from, weight)
+            (boxes, entry.weight, Some(p.cell))
         };
-
-        // Player reachability + connectivity (count all regions).
-        for &b in box_list.iter() {
-            box_at[b as usize] = false;
-        }
-        box_list.clear();
-        box_list.extend_from_slice(&boxes);
-        for &b in box_list.iter() {
+        let player = entry.player;
+        for &b in &boxes {
             box_at[b as usize] = true;
         }
         reach_gen += 1;
-        bfs_queue.clear();
-        bfs_queue.push(player);
-        reach_stamp[player as usize] = reach_gen;
-        let mut norm = player;
-        let mut head = 0;
-        while head < bfs_queue.len() {
-            let sq = bfs_queue[head];
-            head += 1;
-            norm = norm.min(sq);
-            for d in 0..4 {
-                let n = board.neighbors[sq as usize][d];
-                if n != NONE && reach_stamp[n as usize] != reach_gen && !box_at[n as usize] {
-                    reach_stamp[n as usize] = reach_gen;
-                    bfs_queue.push(n);
+        let norm = flood(board, &box_at, player, &mut reach, reach_gen, &mut reach_list);
+
+        let outcome: Option<Outcome> = 'expand: {
+            if expanded.insert(board.canonical_key(&boxes, &reach_list, norm), ()).is_some() {
+                stats.duplicates += 1;
+                break 'expand None;
+            }
+            if boxes.iter().all(|&b| board.is_goal[b as usize]) {
+                let node_idx = arena.len() as u32;
+                arena.push(Node {
+                    boxes: boxes.clone(),
+                    player,
+                    parent: entry.parent,
+                    box_idx: entry.box_idx,
+                    to: entry.to,
+                    weight,
+                    cell: (0, 0),
+                });
+                stats.time = start_time.elapsed();
+                let pushes = reconstruct(board, &arena, node_idx, &mut macro_gen);
+                break 'expand Some(Outcome::Solved { pushes, stats: stats.clone() });
+            }
+
+            // Expensive deadlock checks, only for positions actually chosen.
+            let restricted = if opts.corral {
+                let focus = (entry.parent != NO_PARENT).then_some(entry.to);
+                match corral.analyze(
+                    board,
+                    &box_at,
+                    |sq| reach[sq as usize] == reach_gen,
+                    player,
+                    &mut freeze,
+                    equal_goals_boxes,
+                    focus,
+                ) {
+                    CorralResult::Deadlock => {
+                        stats.deadlocks += 1;
+                        break 'expand None;
+                    }
+                    CorralResult::Restrict(p) => Some(p),
+                    CorralResult::NoPruning => None,
                 }
+            } else {
+                None
+            };
+            if crate::deadlock::scan_frozen(&mut freeze, board, &box_at, &boxes, &mut frozen_flags) {
+                stats.deadlocks += 1;
+                break 'expand None;
             }
-        }
-
-        if tt.insert(board.canonical_key(&boxes, &bfs_queue, norm), ()).is_some() {
-            stats.duplicates += 1;
-            continue;
-        }
-
-        // Features of this state.
-        let packed = boxes.iter().filter(|&&b| board.is_goal[b as usize]).count() as u8;
-        let connectivity =
-            count_regions(board, &box_at, &mut conn_stamp, &mut conn_gen, &mut conn_queue);
-        let own_cell: Cell = (packed, connectivity);
-        let cell = if parent == NO_PARENT {
-            own_cell
-        } else {
-            let pc = arena[parent as usize].cell;
-            if better_or_equal(own_cell, pc) { own_cell } else { pc }
-        };
-
-        let node_idx = arena.len() as u32;
-        arena.push(FNode {
-            boxes,
-            player,
-            weight,
-            cell,
-            parent,
-            push_box_from: box_from,
-            push_dir: dir,
-        });
-        stats.expanded += 1;
-
-        let node = &arena[node_idx as usize];
-        if packed as usize == node.boxes.len() {
-            stats.time = start_time.elapsed();
-            let mut pushes = Vec::new();
-            let mut cur = node_idx;
-            while arena[cur as usize].parent != NO_PARENT {
-                let n = &arena[cur as usize];
-                pushes.push((n.push_box_from, n.push_dir));
-                cur = n.parent;
+            // Every box must still reach a distinct goal, with boxes frozen on
+            // goals as walls (see deadlock::FrozenWalls).
+            let frozen = &frozen_flags;
+            frozen_squares.clear();
+            frozen_squares.extend(boxes.iter().zip(frozen.iter()).filter(|p| *p.1).map(|p| *p.0));
+            let walled = (!frozen_squares.is_empty()).then(|| frozen_walls.distances(board, &frozen_squares));
+            let dist = walled.as_deref().unwrap_or(&board.goal_dist);
+            let feasible = matcher.solve(boxes.len(), board.goals.len(), |i, j| {
+                if frozen[i] {
+                    return (board.goals[j] == boxes[i]).then_some(0);
+                }
+                let d = dist[j][boxes[i] as usize];
+                (d != INF).then_some(d)
+            });
+            if feasible.is_none() {
+                stats.deadlocks += 1;
+                break 'expand None;
             }
-            pushes.reverse();
-            return Outcome::Solved { pushes, stats };
-        }
 
-        // Candidate pushes, restricted by PI-corral analysis when it applies.
-        let candidates: Option<Vec<(u16, u8)>> = if opts.corral {
-            match corral.analyze(
-                board,
-                &box_at,
-                |sq| reach_stamp[sq as usize] == reach_gen,
-                player,
-                &mut freeze,
-                equal_goals_boxes,
-                if parent == NO_PARENT { None } else { Some(player_push_target(board, node)) },
-            ) {
-                CorralResult::Deadlock => {
+            // This node's features and cell.
+            let own: Cell = (packed(&boxes), regions.label(board, &box_at));
+            let cell = match parent_cell {
+                Some(pc) if !better(own, pc) => pc,
+                _ => own,
+            };
+            if better(cell, best_cell) {
+                best_cell = cell;
+            }
+            let node_idx = arena.len() as u32;
+            arena.push(Node { boxes, player, parent: entry.parent, box_idx: entry.box_idx, to: entry.to, weight, cell });
+            stats.expanded += 1;
+            let node = &arena[node_idx as usize];
+
+            // Generate and score children (each move's region count comes
+            // from the generator's articulation data, see macros.rs).
+            let own_regions = Regions { label: &regions.label, count: own.1 };
+            match &restricted {
+                Some(first) => macro_gen.generate_restricted(board, &node.boxes, &mut box_at, first, Some(&own_regions), &mut moves),
+                None => macro_gen.generate(board, &node.boxes, &mut box_at, |sq| reach[sq as usize] == reach_gen, Some(&own_regions), &mut moves),
+            }
+            let dist_sum: u32 = node.boxes.iter().map(|&b| board.min_goal_dist[b as usize]).sum();
+            let own_hot = hotspots.count(&node.boxes);
+            let mut children: Vec<(Cell, u32, usize, u32)> = Vec::with_capacity(moves.len());
+            let mut child_boxes: Vec<u16> = Vec::with_capacity(node.boxes.len());
+            for (mi, m) in moves.iter().enumerate() {
+                box_at[m.from as usize] = false;
+                box_at[m.to as usize] = true;
+                let dead = freeze.is_freeze_deadlock(board, &box_at, m.to)
+                    || dead_sets.moved_box_dead(&node.boxes, m.box_idx, m.to, m.player);
+                let child_regions = m.regions;
+                box_at[m.to as usize] = false;
+                box_at[m.from as usize] = true;
+                if dead {
                     stats.deadlocks += 1;
                     continue;
                 }
-                CorralResult::Restrict(p) => Some(p),
-                CorralResult::NoPruning => None,
+                child_boxes.clear();
+                child_boxes.extend_from_slice(&node.boxes);
+                child_boxes[m.box_idx] = m.to;
+                let child_packed = packed(&child_boxes);
+                let d = dist_sum - board.min_goal_dist[m.from as usize] + board.min_goal_dist[m.to as usize];
+                children.push(((child_packed, child_regions), d, mi, hotspots.count(&child_boxes)));
             }
-        } else {
+
+            // Advisors: the best packing move and the best region-merging
+            // move are free; everything else costs 1.
+            let rank = |c: &(Cell, u32, usize, u32)| (Reverse(c.0 .0), c.0 .1, c.3, c.1);
+            let packer = children.iter().filter(|c| c.0 .0 > own.0).min_by_key(|c| rank(c)).map(|c| c.2);
+            let merger = children.iter().filter(|c| c.0 .1 < own.1).min_by_key(|c| rank(c)).map(|c| c.2);
+            let unblocker = children
+                .iter()
+                .filter(|c| c.3 < own_hot && c.0 .0 >= own.0)
+                .min_by_key(|c| rank(c))
+                .map(|c| c.2);
+
+            let heap = cells.entry(cell).or_insert_with(|| {
+                rotation.push(cell);
+                cursor = rotation.len() - 1; // a new cell is served next
+                BinaryHeap::new()
+            });
+            for &((packed, child_regions), d, mi, child_hot) in &children {
+                let m = &moves[mi];
+                let move_weight = if Some(mi) == packer || Some(mi) == merger || Some(mi) == unblocker { 0 } else { 1 };
+                seq += 1;
+                heap.push(Reverse(Pending {
+                    weight: node.weight + move_weight,
+                    unpacked: u32::MAX - packed,
+                    regions: child_regions,
+                    hotspots: child_hot,
+                    dist: d,
+                    newest: Reverse(seq),
+                    parent: node_idx,
+                    box_idx: m.box_idx as u16,
+                    to: m.to,
+                    player: m.player,
+                }));
+            }
+            stats.generated += children.len() as u64;
+            pending += children.len();
             None
         };
 
-        let node_boxes = &node.boxes;
-        if crate::deadlock::scan_frozen(&mut freeze, board, &box_at, node_boxes, &mut frozen_flags)
-        {
-            stats.deadlocks += 1;
-            continue;
+        box_at.iter_mut().for_each(|b| *b = false);
+        if let Some(out) = outcome {
+            return out;
         }
-        let frozen = &frozen_flags;
-        let node_cost = |i: usize, j: usize| -> Option<u32> {
-            if frozen[i] {
-                return (board.goals[j] == node_boxes[i]).then_some(0);
-            }
-            let d = board.goal_dist[j][node_boxes[i] as usize];
-            (d != INF).then_some(d)
-        };
-        if matcher.solve(node_boxes.len(), board.goals.len(), node_cost).is_none() {
-            stats.deadlocks += 1;
-            continue;
-        }
-        matcher.snapshot();
+    }
+}
 
-        // Evaluate all legal pushes: legality, deadlocks, feature deltas.
-        struct Cand {
-            bi: usize,
-            dir: u8,
-            h: u32,
-            packs: bool,
-            conn_improves: bool,
-            conn_after: u8,
-        }
-        let mut cands: Vec<Cand> = Vec::new();
-        let reach_mark = reach_gen; // player flood stamp
-        let mut consider = |bi: usize, d: usize,
-                            box_at: &mut Vec<bool>,
-                            freeze: &mut FreezeChecker,
-                            matcher: &mut Matcher,
-                            conn_stamp: &mut Vec<u32>,
-                            conn_gen: &mut u32,
-                            conn_queue: &mut Vec<u16>,
-                            stats: &mut Stats| {
-            let b = node_boxes[bi];
-            let to = board.neighbors[b as usize][d];
-            if to == NONE || box_at[to as usize] || board.dead[to as usize] {
-                return;
-            }
-            let behind = board.neighbors[b as usize][OPP[d]];
-            if behind == NONE
-                || box_at[behind as usize]
-                || reach_stamp[behind as usize] != reach_mark
-            {
-                return;
-            }
-            box_at[b as usize] = false;
-            box_at[to as usize] = true;
-            let mut ok = !freeze.is_freeze_deadlock(board, box_at, to);
-            let mut h_child = 0u32;
-            if ok {
-                let bi_locked = board.is_goal[to as usize] && freeze.frozen(board, box_at, to);
-                matcher.restore();
-                match matcher.resolve_row(bi, |i, j| {
-                    if i == bi {
-                        if bi_locked {
-                            return (board.goals[j] == to).then_some(0);
-                        }
-                    } else if frozen[i] {
-                        return (board.goals[j] == node_boxes[i]).then_some(0);
-                    }
-                    let sq = if i == bi { to } else { node_boxes[i] };
-                    let dist = board.goal_dist[j][sq as usize];
-                    (dist != INF).then_some(dist)
-                }) {
-                    Some(h) => h_child = h as u32,
-                    None => ok = false,
-                }
-            }
-            let mut conn_after = 0u8;
-            if ok {
-                conn_after = count_regions(board, box_at, conn_stamp, conn_gen, conn_queue);
-            }
-            box_at[to as usize] = false;
-            box_at[b as usize] = true;
-            if !ok {
-                stats.deadlocks += 1;
-                return;
-            }
-            cands.push(Cand {
-                bi,
-                dir: d as u8,
-                h: h_child,
-                packs: board.is_goal[to as usize] && !board.is_goal[b as usize],
-                conn_improves: conn_after < connectivity,
-                conn_after,
-            });
-        };
-        match &candidates {
-            Some(restricted) => {
-                for &(b, d) in restricted {
-                    let bi = node_boxes.iter().position(|&x| x == b).unwrap();
-                    consider(bi, d as usize, &mut box_at, &mut freeze, &mut matcher,
-                             &mut conn_stamp, &mut conn_gen, &mut conn_queue, &mut stats);
-                }
+/// Pop the least move of the cell under the cursor, dropping exhausted
+/// cells; None when every cell is empty.
+fn pop_cyclic(
+    cells: &mut FxHashMap<Cell, BinaryHeap<Reverse<Pending>>>,
+    rotation: &mut Vec<Cell>,
+    cursor: &mut usize,
+) -> Option<Pending> {
+    while !rotation.is_empty() {
+        *cursor %= rotation.len();
+        let cell = rotation[*cursor];
+        match cells.get_mut(&cell).and_then(|h| h.pop()) {
+            Some(Reverse(e)) => {
+                *cursor += 1;
+                return Some(e);
             }
             None => {
-                for bi in 0..node_boxes.len() {
-                    for d in 0..4 {
-                        consider(bi, d, &mut box_at, &mut freeze, &mut matcher,
-                                 &mut conn_stamp, &mut conn_gen, &mut conn_queue, &mut stats);
+                cells.remove(&cell);
+                rotation.remove(*cursor);
+            }
+        }
+    }
+    None
+}
+
+/// Player flood fill; stamps `reach` with `stamp`, lists the region in
+/// `list`, returns its minimum square.
+fn flood(board: &Board, box_at: &[bool], player: u16, reach: &mut [u32], stamp: u32, list: &mut Vec<u16>) -> u16 {
+    list.clear();
+    list.push(player);
+    reach[player as usize] = stamp;
+    let mut norm = player;
+    let mut head = 0;
+    while head < list.len() {
+        let sq = list[head];
+        head += 1;
+        norm = norm.min(sq);
+        for &n in &board.neighbors[sq as usize] {
+            if n != NONE && reach[n as usize] != stamp && !box_at[n as usize] {
+                reach[n as usize] = stamp;
+                list.push(n);
+            }
+        }
+    }
+    norm
+}
+
+/// Labels the connected regions of free (non-box) squares.
+struct RegionCounter {
+    /// Region id per free square (u32::MAX on boxes), from the last `label`.
+    label: Vec<u32>,
+    stack: Vec<u16>,
+}
+
+impl RegionCounter {
+    fn new(board: &Board) -> Self {
+        RegionCounter { label: vec![u32::MAX; board.num_squares], stack: Vec::new() }
+    }
+
+    /// Label every free square's region; returns the number of regions.
+    fn label(&mut self, board: &Board, box_at: &[bool]) -> u32 {
+        self.label.iter_mut().for_each(|l| *l = u32::MAX);
+        let mut regions = 0;
+        for start in 0..board.num_squares {
+            if box_at[start] || self.label[start] != u32::MAX {
+                continue;
+            }
+            self.label[start] = regions;
+            self.stack.clear();
+            self.stack.push(start as u16);
+            while let Some(s) = self.stack.pop() {
+                for &n in &board.neighbors[s as usize] {
+                    if n != NONE && self.label[n as usize] == u32::MAX && !box_at[n as usize] {
+                        self.label[n as usize] = regions;
+                        self.stack.push(n);
                     }
                 }
             }
+            regions += 1;
         }
-        drop(consider);
-
-        // Advisors: the best packing move and the best connectivity-improving
-        // move get weight 0; everything else weight 1.
-        let packing_pick = cands
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.packs)
-            .min_by_key(|(_, c)| (c.conn_after, c.h))
-            .map(|(i, _)| i);
-        let conn_pick = cands
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.conn_improves)
-            .min_by_key(|(_, c)| (c.conn_after, c.h))
-            .map(|(i, _)| i);
-
-        let target_cell = arena[node_idx as usize].cell;
-        for (i, c) in cands.iter().enumerate() {
-            let mw = if Some(i) == packing_pick || Some(i) == conn_pick { 0 } else { 1 };
-            seq += 1;
-            stats.generated += 1;
-            let entry = Reverse((
-                arena[node_idx as usize].weight + mw,
-                c.h,
-                seq,
-                node_idx,
-                node_boxes[c.bi],
-                c.dir,
-            ));
-            match cells.entry(target_cell) {
-                std::collections::hash_map::Entry::Occupied(mut e) => e.get_mut().push(entry),
-                std::collections::hash_map::Entry::Vacant(e) => {
-                    e.insert(BinaryHeap::from([entry]));
-                    rotation.push(target_cell);
-                }
-            }
-        }
+        regions
     }
 }
 
-/// The square the node's incoming push moved its box to.
-fn player_push_target(board: &Board, node: &FNode) -> u16 {
-    board.neighbors[node.push_box_from as usize][node.push_dir as usize]
-}
-
-/// Number of player-connected regions of the free squares.
-fn count_regions(
-    board: &Board,
-    box_at: &[bool],
-    stamp: &mut [u32],
-    generation: &mut u32,
-    queue: &mut Vec<u16>,
-) -> u8 {
-    *generation += 1;
-    let g = *generation;
-    let mut regions = 0u8;
-    for start in 0..board.num_squares as u16 {
-        if box_at[start as usize] || stamp[start as usize] == g {
-            continue;
-        }
-        regions = regions.saturating_add(1);
-        queue.clear();
-        queue.push(start);
-        stamp[start as usize] = g;
-        let mut head = 0;
-        while head < queue.len() {
-            let s = queue[head];
-            head += 1;
-            for d in 0..4 {
-                let n = board.neighbors[s as usize][d];
-                if n != NONE && stamp[n as usize] != g && !box_at[n as usize] {
-                    stamp[n as usize] = g;
-                    queue.push(n);
-                }
-            }
-        }
+/// Expand the macro path root..node into unit pushes by replaying it.
+fn reconstruct(board: &Board, arena: &[Node], node_idx: u32, macro_gen: &mut MacroGen) -> Vec<(u16, u8)> {
+    let mut path = Vec::new();
+    let mut cur = node_idx;
+    while arena[cur as usize].parent != NO_PARENT {
+        path.push(cur);
+        cur = arena[cur as usize].parent;
     }
-    regions
+    path.reverse();
+
+    let mut pushes = Vec::new();
+    let mut box_at = vec![false; board.num_squares];
+    let mut reach = vec![0u32; board.num_squares];
+    let mut list = Vec::new();
+    for (stamp, &idx) in path.iter().enumerate() {
+        let node = &arena[idx as usize];
+        let parent = &arena[node.parent as usize];
+        box_at.iter_mut().for_each(|b| *b = false);
+        for &b in parent.boxes.iter() {
+            box_at[b as usize] = true;
+        }
+        let stamp = stamp as u32 + 1;
+        flood(board, &box_at, parent.player, &mut reach, stamp, &mut list);
+        let m = Macro {
+            box_idx: node.box_idx as usize,
+            from: parent.boxes[node.box_idx as usize],
+            to: node.to,
+            player: node.player,
+            pushes: 0,
+            regions: 0,
+        };
+        let unit = macro_gen
+            .unit_pushes(board, &mut box_at, |sq| reach[sq as usize] == stamp, &m)
+            .expect("macro move replays");
+        pushes.extend(unit);
+    }
+    pushes
 }

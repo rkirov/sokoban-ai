@@ -43,9 +43,13 @@ pub struct CorralAnalyzer {
     corral_boxes: Vec<u16>,
     region_squares: Vec<u16>,
     /// Corral mini-search: verdict cache keyed by (corral boxes, reduced
-    /// player norm) — true = proven deadlock; false = not proven (also
-    /// cached so budget isn't burned re-deriving unknowns).
-    verdict_cache: rustc_hash::FxHashMap<(Box<[u16]>, u16), bool>,
+    /// player norm, corral region's minimum square) — true = proven
+    /// deadlock; false = not proven (also cached so budget isn't burned
+    /// re-deriving unknowns). The region square is essential: one fence can
+    /// enclose several separate regions with different verdicts (measured:
+    /// without it, ~1.5k cache hits on Microban II returned a "deadlock"
+    /// verdict that had been proven for a different region).
+    verdict_cache: rustc_hash::FxHashMap<(Box<[u16]>, u16, u16), bool>,
     /// Remaining global node budget for mini-searches in this solve.
     mini_budget: u64,
 }
@@ -73,6 +77,13 @@ impl CorralAnalyzer {
             verdict_cache: rustc_hash::FxHashMap::default(),
             mini_budget: 200_000,
         }
+    }
+
+    /// Remaining mini-search budget (tests use it to keep budget exhaustion
+    /// from masquerading as a cache effect).
+    #[cfg(test)]
+    pub fn mini_budget(&self) -> u64 {
+        self.mini_budget
     }
 
     /// Analyze the current node. `box_at` is real box occupancy, `reach` the
@@ -350,7 +361,10 @@ impl CorralAnalyzer {
 
         let mut start_boxes: Box<[u16]> = self.corral_boxes.clone().into_boxed_slice();
         start_boxes.sort_unstable();
-        let cache_key = (start_boxes.clone(), start_norm);
+        // The region is the component of non-corral-box squares containing
+        // its minimum square, so these three values determine the search.
+        let region_min = *self.region_squares.iter().min().expect("non-empty region");
+        let cache_key = (start_boxes.clone(), start_norm, region_min);
         if let Some(&verdict) = self.verdict_cache.get(&cache_key) {
             return verdict;
         }

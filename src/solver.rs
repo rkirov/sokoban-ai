@@ -89,17 +89,12 @@ struct Node {
     parent: u32,
     push_box_from: u16,
     push_dir: u8,
-    /// Number of squares the box moved (>1 for a tunnel macro).
-    push_len: u16,
 }
 
-// NOTE: tunnel macros were tried and reverted. Forcing a box through a
-// wall-flanked goal-free run is UNSOUND without the full published side
-// conditions: a box may need to park inside a tunnel purely to vacate its
-// previous square for player passage (microban 1 level 10 is a concrete
-// counterexample — the solver returned a false UNSOLVABLE). Revisit only
-// with Rolling Stone's exact one-way/two-way formulation plus regression
-// levels for the parking cases.
+// Naive tunnel macros (force a box through any wall-flanked goal-free run)
+// are UNSOUND: a box may need to park inside a tunnel to vacate a square for
+// the player (Microban I #10, tests::tunnel_parking_is_required). The sound
+// replacement is the gate-push rule, level.rs `forced_pushes`.
 
 const NO_PARENT: u32 = u32::MAX;
 
@@ -120,6 +115,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
     let mut tt: FxHashMap<(Box<[u16]>, u16), u32> = FxHashMap::default();
     let mut open: BinaryHeap<Entry> = BinaryHeap::new();
     let mut freeze = FreezeChecker::new(board);
+    let dead_sets = crate::deadsets::DeadSetTables::new(board, crate::deadsets::Direction::Forward);
     let mut corral = CorralAnalyzer::new(board);
     let mut matcher = Matcher::new();
     let equal_goals_boxes = board.goals.len() == board.start_boxes.len();
@@ -131,6 +127,8 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
     let mut reach_gen = 0u32;
     let mut bfs_queue: Vec<u16> = Vec::with_capacity(board.num_squares);
     let mut frozen_flags: Vec<bool> = Vec::new();
+    let mut frozen_squares: Vec<u16> = Vec::new();
+    let mut frozen_walls = crate::deadlock::FrozenWalls::new(board);
 
     let f_of = |g: u32, h: u32| -> u64 {
         match opts.mode {
@@ -165,8 +163,8 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
         }
 
         // Materialize the child state.
-        let (boxes, player, g, focus, push_len) = if parent == NO_PARENT {
-            (board.start_boxes.clone().into_boxed_slice(), board.start_player, 0, None, 0)
+        let (boxes, player, g, focus) = if parent == NO_PARENT {
+            (board.start_boxes.clone().into_boxed_slice(), board.start_player, 0, None)
         } else {
             let p = &arena[parent as usize];
             let to = board.neighbors[box_from as usize][dir as usize];
@@ -174,7 +172,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
             let idx = boxes.iter().position(|&b| b == box_from).unwrap();
             boxes[idx] = to;
             boxes.sort_unstable();
-            (boxes, box_from, p.g + 1, Some(to), 1)
+            (boxes, box_from, p.g + 1, Some(to))
         };
 
         // Player reachability BFS; the minimum reachable square canonicalizes
@@ -220,7 +218,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
         }
 
         let node_idx = arena.len() as u32;
-        arena.push(Node { boxes, player, g, parent, push_box_from: box_from, push_dir: dir, push_len });
+        arena.push(Node { boxes, player, g, parent, push_box_from: box_from, push_dir: dir });
         stats.expanded += 1;
 
         if h == 0 {
@@ -231,15 +229,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                 let mut cur = node_idx;
                 while arena[cur as usize].parent != NO_PARENT {
                     let n = &arena[cur as usize];
-                    // Expand a macro into unit pushes, deepest step first
-                    // (the whole list is reversed afterwards).
-                    let mut sq = n.push_box_from;
-                    let mut steps = Vec::with_capacity(n.push_len as usize);
-                    for _ in 0..n.push_len {
-                        steps.push((sq, n.push_dir));
-                        sq = board.neighbors[sq as usize][n.push_dir as usize];
-                    }
-                    pushes.extend(steps.into_iter().rev());
+                    pushes.push((n.push_box_from, n.push_dir));
                     cur = n.parent;
                 }
                 pushes.reverse();
@@ -247,9 +237,14 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
             }
         }
 
-        // PI-corral analysis: when a qualifying corral exists, only its
-        // fence pushes need to be considered at this node.
-        let candidates: Candidates = if opts.corral {
+        // Gate push (see level.rs `forced_pushes`): the box just pushed can
+        // only usefully continue forward, so that is the only move here.
+        // Otherwise PI-corral analysis: when a qualifying corral exists,
+        // only its fence pushes need to be considered at this node.
+        let candidates: Candidates = if parent != NO_PARENT && board.forced[box_from as usize][dir as usize] {
+            let to = board.neighbors[box_from as usize][dir as usize];
+            Candidates::Restricted(vec![(to, dir)])
+        } else if opts.corral {
             match corral.analyze(
                 board,
                 &box_at,
@@ -283,11 +278,18 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
             continue;
         }
         let frozen = &frozen_flags;
+        // Distances with boxes frozen on goals as walls (they never move
+        // again, so the walls hold in every descendant: still a lower bound;
+        // see deadlock::FrozenWalls).
+        frozen_squares.clear();
+        frozen_squares.extend(node_boxes.iter().zip(frozen.iter()).filter(|p| *p.1).map(|p| *p.0));
+        let walled = (!frozen_squares.is_empty()).then(|| frozen_walls.distances(board, &frozen_squares));
+        let dist_table = walled.as_deref().unwrap_or(&board.goal_dist);
         let node_cost = |i: usize, j: usize| -> Option<u32> {
             if frozen[i] {
                 return (board.goals[j] == node_boxes[i]).then_some(0);
             }
-            let d = board.goal_dist[j][node_boxes[i] as usize];
+            let d = dist_table[j][node_boxes[i] as usize];
             (d != crate::level::INF).then_some(d)
         };
         if matcher.solve(node_boxes.len(), board.goals.len(), node_cost).is_none() {
@@ -323,7 +325,8 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
             // pushed box freezes ON a goal its row locks to that goal.
             box_at[b as usize] = false;
             box_at[to as usize] = true;
-            let frozen_dead = freeze.is_freeze_deadlock(board, box_at, to);
+            let frozen_dead = freeze.is_freeze_deadlock(board, box_at, to)
+                || dead_sets.moved_box_dead(node_boxes, bi, to, b);
             let h_child = if frozen_dead {
                 None
             } else {
@@ -339,7 +342,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                         return (board.goals[j] == node_boxes[i]).then_some(0);
                     }
                     let sq = if i == bi { to } else { node_boxes[i] };
-                    let dist = board.goal_dist[j][sq as usize];
+                    let dist = dist_table[j][sq as usize];
                     (dist != crate::level::INF).then_some(dist)
                 })
             };
@@ -423,6 +426,7 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
         }
     };
 
+    let back_sets = crate::deadsets::DeadSetTables::new(board, crate::deadsets::Direction::Backward);
     let goal_boxes: Box<[u16]> = {
         let mut g = board.goals.clone();
         g.sort_unstable();
@@ -535,7 +539,12 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
             }
         }
 
-        match tt.entry(board.canonical_key(&boxes, &bfs_queue, norm)) {
+        // Raw key, NOT `canonical_key`: board automorphisms preserve walls
+        // and goals but not the start squares this search is aiming for, so
+        // merging a state with its mirror image loses the paths that reach
+        // the actual start (a mirror-symmetric one-push level was reported
+        // unsolvable; see tests::backward_search_on_symmetric_board).
+        match tt.entry((boxes.clone(), norm)) {
             std::collections::hash_map::Entry::Occupied(mut e) => {
                 if *e.get() <= g {
                     stats.duplicates += 1;
@@ -556,7 +565,6 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
             parent,
             push_box_from: box_from,
             push_dir: dir,
-            push_len: 1,
         });
         stats.expanded += 1;
 
@@ -611,6 +619,10 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
                 }
                 let beyond = board.neighbors[to as usize][d];
                 if beyond == NONE || box_at[beyond as usize] {
+                    continue;
+                }
+                // Small box-set deadlocks for pull searches (see deadsets.rs).
+                if back_sets.moved_box_dead(node_boxes, bi, to, beyond) {
                     continue;
                 }
 
