@@ -117,3 +117,15 @@ Same-machine reference: YASS 2.153 solves 117 SokHard levels at 10 s
   queue ~15%, corral ~9%.
 - XSokoban failures split between early stalls (preparation needed) and
   "all but 1–3 packed" positions that are dead.
+- Unlike SokHard, XSokoban is not time-bound: a 60 s run solves only 4 of
+  the 23 levels failed at 10 s (all by FESS). The gap is guidance and
+  dead-end recognition, not speed.
+- FESS's best positions on failed levels are genuinely dead: exhaustive
+  search proves XSokoban #31's best position (16/20 packed) unsolvable in
+  30 s and #14's (14/18) in 6.6 s. For #31, removing any single outside box
+  leaves it dead (≈2 s proofs), so the packed room plus player position is
+  the cause — a packing the relaxation-based tables accept. For #14 the
+  remaining boxes cannot all get through (a capacity/routing effect).
+  Remedy in principle: learned deadlock patterns (prove dead, shrink to a
+  minimal dead core by removing boxes, prune positions containing it), as
+  in Festival — but proofs cost 2-30 s each, too slow to pay off at 10 s.
