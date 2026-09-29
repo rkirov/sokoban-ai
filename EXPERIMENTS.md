@@ -109,7 +109,7 @@ Same-machine reference: YASS 2.153 solves 117 SokHard levels at 10 s
 | Dual-based O(m) child lower bounds, exact matching only when popped (backward search) | sound (weak duality); identical optimal pushes | backward alone +3 Microban levels, faster on 3 of 4 sets; portfolio SokHard 117/116 vs 114/116, Holland equal and 8% faster | kept |
 | Backward "freeze": erase pullable boxes to a fixed point; leftovers never move | sound (erasure frees more than any placement); a solution-replay test confirmed no false positives | fixed 400k-node budget on SokHard 48 → 49, but backward 27% slower per node and no Microban gains | rejected |
 | Generation-time duplicate rejection in backward search (TT keyed by box set; flood the child's region only when its box set was seen) | sound; 60–70% of backward pops were duplicates and ~80% of those are catchable at generation | identical optimal pushes; identical time at a fixed 400k-node budget (the child floods cost what the saved pops did); backward alone on Microban −2 levels; portfolio SokHard 117/117 vs 116/116, Holland 61 = 61 | rejected: within noise, ~40 lines |
-| Player-side-aware single-box distances | known technique | not tried |
+| Player-side-aware single-box distances (BFS over box square × player-side component; min over sides, so a drop-in table) | sound; tighter on 70/163 SokHard and 50/90 XSokoban levels, new dead squares on 27 SokHard levels | optimal A\* pushes identical on all four Microban sets, faster on 3 of 4; portfolio SokHard 114 (aware) vs 103 (baseline, run while the machine was swapping) — measurement interrupted | pending: code on branch `player-aware-dists` |
 | FESS advisors for reopening goals / two-move preparation witnesses | speculative | not tried |
 
 ## Calibration facts
