@@ -74,6 +74,7 @@ Same-machine reference: YASS 2.153 solves 117 SokHard levels at 10 s
 | Weighted backward thread (w = 3) *replacing* optimal backward | alone 70 vs 61, portfolio 97 → 87 | rejected: solo strength ≠ portfolio value |
 | Weighted backward (w = 3) *alongside* optimal backward, replacing bidir (chosen from unions of solo runs: 100 vs 95 on SokHard) | head-to-head on every pack: Microban 486 → 488, Holland 59 → 61, SokHard 99/100 → 103/98 (noise), others equal | kept as default |
 | Bidir forward side with A\*'s gate and frozen-wall rules | bidir alone 77 → 84, portfolio neutral | reverted |
+| Size-adaptive portfolio: a second, differently planned FESS on large levels (FESS wins 63/67 XSokoban solves) | upper bound first: FESS variants alone on the 23 XSokoban misses solve 1 (far-removal plans) / 0 (plan progress everywhere) / 0 (control) | not built |
 | Bidirectional search (the earlier session's meet-in-the-middle, 500 lines) | out of the default once weighted backward replaced it with no loss on any pack | removed (simplicity) |
 | Only a verified solution stops the portfolio; contradicting "unsolvable" claims reported | safety | kept |
 | Memory watchdog (process RSS, default half of RAM) | no machine OOM at long limits; same results | kept |
