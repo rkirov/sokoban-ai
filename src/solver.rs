@@ -64,6 +64,8 @@ pub struct Stats {
     pub generated: u64,
     pub deadlocks: u64,
     pub duplicates: u64,
+    /// Entries re-queued because their exact bound beat their queued one.
+    pub requeued: u64,
     pub time: Duration,
 }
 
@@ -583,18 +585,38 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
         // merging a state with its mirror image loses the paths that reach
         // the actual start (a mirror-symmetric one-push level was reported
         // unsolvable; see tests::backward_search_on_symmetric_board).
-        match tt.entry((sorted.clone(), norm)) {
-            std::collections::hash_map::Entry::Occupied(mut e) => {
-                if *e.get() <= g {
-                    stats.duplicates += 1;
-                    continue;
-                }
-                e.insert(g);
-            }
-            std::collections::hash_map::Entry::Vacant(e) => {
-                e.insert(g);
-            }
+        // Children are queued with an O(m) lower bound (see
+        // Matcher::row_lower_bound); the exact matching is computed here, by
+        // warm start from the parent. If it raises the key, re-queue instead
+        // of expanding — nothing is stored yet, so this is cheap to undo.
+        if tt.get(&(sorted.clone(), norm)).is_some_and(|&seen| seen <= g) {
+            stats.duplicates += 1;
+            continue;
         }
+        let m = board.start_boxes.len();
+        let cost = |i: usize, j: usize| -> Option<u32> {
+            let d = board.start_dist[j][boxes[i] as usize];
+            (d != crate::level::INF).then_some(d)
+        };
+        let exact = match moved {
+            Some(row) => {
+                let at = parent as usize * (m + 1);
+                matcher.load(boxes.len(), m, &state_v[at..at + m + 1], &state_p[at..at + m + 1], cost);
+                matcher.resolve_row(row, cost)
+            }
+            None => matcher.solve(boxes.len(), m, cost),
+        };
+        let Some(exact) = exact else {
+            stats.deadlocks += 1;
+            continue;
+        };
+        let h_exact = exact as u32;
+        if h_exact > h {
+            open.push(f_of(g, h_exact), h_exact, (parent, box_from, dir));
+            stats.requeued += 1;
+            continue;
+        }
+        tt.insert((sorted.clone(), norm), g);
 
         let node_idx = arena.len() as u32;
         arena.push(Node {
@@ -606,14 +628,16 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
             push_dir: dir,
         });
         stats.expanded += 1;
+        // Solved matching state per stored node, for its children's warm start.
+        matcher.save(&mut state_v, &mut state_p);
 
         // Solved: boxes on the start squares AND the player's region contains
-        // the forward start position (h == 0 with exact distances implies the
-        // box set equals the start set).
-        if h == 0 && reach_stamp[board.start_player as usize] == reach_gen {
+        // the forward start position.
+        if h_exact == 0 && reach_stamp[board.start_player as usize] == reach_gen {
             if sorted.as_ref() == board.start_boxes.as_slice() {
                 stats.time = start_time.elapsed();
-                // Reversed pulls become forward pushes.
+                // Reversed pulls become forward pushes; walking from the
+                // solved node back to the root visits them in forward order.
                 let mut pushes = Vec::with_capacity(g as usize);
                 let mut cur = node_idx;
                 while arena[cur as usize].parent != NO_PARENT {
@@ -622,38 +646,11 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
                     pushes.push((pulled_to, OPP[n.push_dir as usize] as u8));
                     cur = n.parent;
                 }
-                // Walking from the root: pulls were recorded backward-in-time,
-                // and reversing the (already reverse-ordered) list yields...
-                // the same backward order; the collection above walks from the
-                // last pull to the first, which IS forward order for pushes.
-                stats.time = start_time.elapsed();
                 return Outcome::Solved { pushes, stats };
             }
         }
-
-        // Node-level matching state against start squares.
         let node = &arena[node_idx as usize];
         let node_boxes = &node.boxes;
-        let node_cost = |i: usize, j: usize| -> Option<u32> {
-            let d = board.start_dist[j][node_boxes[i] as usize];
-            (d != crate::level::INF).then_some(d)
-        };
-        let m = board.start_boxes.len();
-        let solved = match moved {
-            Some(row) => {
-                let at = parent as usize * (m + 1);
-                matcher.load(node_boxes.len(), m, &state_v[at..at + m + 1], &state_p[at..at + m + 1], node_cost);
-                matcher.resolve_row(row, node_cost)
-            }
-            None => matcher.solve(node_boxes.len(), m, node_cost),
-        };
-        // Every arena node gets a state slot (dead nodes keep a stale one;
-        // they are never expanded further).
-        matcher.save(&mut state_v, &mut state_p);
-        if solved.is_none() {
-            continue;
-        }
-        matcher.snapshot();
 
         // Pulls: box at b, player reaches b+d, steps to b+2d.
         for bi in 0..node_boxes.len() {
@@ -676,8 +673,7 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
                     continue;
                 }
 
-                matcher.restore();
-                let h_child = matcher.resolve_row(bi, |i, j| {
+                let h_child = matcher.row_lower_bound(bi, exact, |i, j| {
                     let sq = if i == bi { to } else { node_boxes[i] };
                     let dist = board.start_dist[j][sq as usize];
                     (dist != crate::level::INF).then_some(dist)

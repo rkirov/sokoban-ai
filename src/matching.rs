@@ -125,6 +125,23 @@ impl Matcher {
         self.used.resize(k, false);
     }
 
+    /// Admissible lower bound on the optimum after row `r0`'s costs change,
+    /// in O(m), from the current optimal state (value `total`): replacing
+    /// u_r by the row's minimum reduced cost min_j (c'_rj - v_j) keeps the
+    /// duals feasible, and any feasible dual objective (sum u + sum v) is a
+    /// lower bound on the new optimum (weak duality). None if the row has no
+    /// finite cost (that box can reach no column at all).
+    pub fn row_lower_bound(&self, r0: usize, total: u64, cost: impl Fn(usize, usize) -> Option<u32>) -> Option<u64> {
+        let r = r0 + 1;
+        let mut best = i64::MAX;
+        for j in 1..=self.m {
+            if let Some(c) = cost(r0, j - 1) {
+                best = best.min(c as i64 - self.v[j]);
+            }
+        }
+        (best != i64::MAX).then(|| (total as i64 - self.u[r] + best).max(0) as u64)
+    }
+
     /// Save (u, v, p) so children can each re-augment from the node's state.
     pub fn snapshot(&mut self) {
         self.su.clone_from(&self.u);
