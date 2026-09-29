@@ -27,9 +27,9 @@ SokHard and the other LTS sets were never used for tuning until measured.
 | Set | Start | End |
 |-----|-------|-----|
 | XSokoban | 16 | 67 |
-| Microban I–IV | 480 | 486 |
-| SokHard | 61 (first measured) | 98 |
-| Holland / Sasquatch / Grigr2001 / SokEvo | 57 / 26 / 90 / 107 | 59 / 29 / 93 / 107 |
+| Microban I–IV | 480 | 488 |
+| SokHard | 61 (first measured) | ~100 (98–103) |
+| Holland / Sasquatch / Grigr2001 / SokEvo | 57 / 26 / 90 / 107 | 61 / 29 / 93 / 107 |
 
 Same-machine reference: YASS 2.153 solves 117 SokHard levels at 10 s
 (single-threaded), and 477 Microban levels.
@@ -71,7 +71,8 @@ Same-machine reference: YASS 2.153 solves 117 SokHard levels at 10 s
 | Weighted A\* thread | no unique Microban solves | opt-in only |
 | Backward (pull) A\* replacing the second FESS thread | SokHard +3, Microban +1 | kept |
 | Bidir expands the smaller frontier (Pohl) instead of alternating | SokHard +6 | kept |
-| Weighted backward thread (w = 3) | alone 70 vs 61, portfolio 97 → 87 | rejected: solo strength ≠ portfolio value |
+| Weighted backward thread (w = 3) *replacing* optimal backward | alone 70 vs 61, portfolio 97 → 87 | rejected: solo strength ≠ portfolio value |
+| Weighted backward (w = 3) *alongside* optimal backward, replacing bidir (chosen from unions of solo runs: 100 vs 95 on SokHard) | head-to-head on every pack: Microban 486 → 488, Holland 59 → 61, SokHard 99/100 → 103/98 (noise), others equal | kept as default |
 | Bidir forward side with A\*'s gate and frozen-wall rules | bidir alone 77 → 84, portfolio neutral | reverted |
 | Only a verified solution stops the portfolio; contradicting "unsolvable" claims reported | safety | kept |
 | Memory watchdog (process RSS, default half of RAM) | no machine OOM at long limits; same results | kept |

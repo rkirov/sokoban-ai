@@ -15,6 +15,7 @@ cargo build --release
 ./target/release/sokoban-solver levels/microban1.txt --level 42      # one level
 ./target/release/sokoban-solver levels/xsokoban.txt --time-limit 60  # per-level budget (seconds)
 ./target/release/sokoban-solver f.txt --portfolio optimal,bidir,fess      # choose the racing strategies
+                                                                      # (also: weighted, backward, backward:W)
 ./target/release/sokoban-solver f.txt --mode optimal                 # push-optimal A* only
 ./target/release/sokoban-solver f.txt --mode fess                    # feature-space search only
 ./target/release/sokoban-solver f.txt --mode backward                # pull search from the goal
@@ -32,9 +33,11 @@ against the original level text before it is reported.
 
 Four threads race with the full time budget each; the first *solution*
 stops the others. Default: push-optimal A\* (reported solutions are optimal
-whenever it finishes first), bidirectional search, FESS, and backward (pull)
-search. The portfolio was chosen by measuring each strategy's *unique*
-solves (weighted A\* is available with `--portfolio` but added none).
+whenever it finishes first), FESS, and backward (pull) search twice —
+optimal and weighted (w = 3) — because the two orderings solve different
+cramped levels. The portfolio was chosen by measuring each strategy's
+*unique* solves and then head-to-head on every pack; bidirectional search
+and weighted forward A\* are available with `--portfolio`.
 
 An "unsolvable" verdict only ends the thread that reached it: solutions are
 verified by replay, verdicts are not, so one unsound strategy cannot stop
@@ -111,20 +114,21 @@ Per-level time limit 10 s, 4-core machine, full default portfolio.
 
 | Set | Levels | This solver | Same machine: YASS 2.153 | Published @10 s: Festival / Sokolution* |
 |-----|--------|-------------|--------------------------|------------------------------------------|
-| Microban I–IV | 493 | **486** | 477 | — |
+| Microban I–IV | 493 | **488** | 477 | — |
 | XSokoban | 90 | **67** | — | 88 / 85 |
 | SokEvo | 107 | **107** | — | 107 / 107 |
 | Grigr2001 | 100 | **93** | — | 96 / 96 |
-| Holland | 81 | **59** | — | 65 / 68 |
+| Holland | 81 | **61** | — | 65 / 68 |
 | Sasquatch | 50 | **29** | — | 41 / 43 |
-| SokHard | 163 | **98** | 117 | 134 / 163 |
+| SokHard | 163 | **98–103** | 117 | 134 / 163 |
 
 \* From the sokobano.de solver statistics (Large Test Suite), measured on a
 Ryzen 9 7900X with 8+ threads — not directly comparable. YASS was built from
 source and run single-threaded on the same 4-core machine as this solver.
 
 Progress in the September 2026 session (same machine, 10 s): XSokoban
-16 → 67, Microban 480 → 486, SokHard 61 → 98. The remaining gap is on small,
+16 → 67, Microban 480 → 488, SokHard 61 → ~100 (runs vary by ±3–5
+on this shared machine). The remaining gap is on small,
 dense levels (SokHard, Sasquatch), where YASS reaches solutions with far
 fewer search nodes; larger deadlock sets and stronger lower bounds are the
 next things to try there.

@@ -20,9 +20,10 @@ use std::time::Duration;
 
 /// One thread of the racing portfolio. The default portfolio was chosen by
 /// measuring each strategy's unique solves at 10 s/level: optimal A* (also
-/// gives push-optimal answers), bidirectional search, FESS (large levels)
-/// and backward search (cramped goal areas). Weighted A* solved no level the
-/// others miss, so it is opt-in.
+/// gives push-optimal answers), FESS (large levels), and backward search
+/// twice — optimal and weighted (w = 3) — since cramped goal areas are easy
+/// backward and the two orderings solve different levels. Bidirectional
+/// search and weighted forward A* are opt-in (they added no solves).
 #[derive(Clone, Copy)]
 enum Strategy {
     /// Forward push-optimal A*.
@@ -32,23 +33,24 @@ enum Strategy {
     Bidir,
     /// Weighted A*: w=3 for half the budget, then w=5.
     Weighted,
-    /// Backward (pull) A* from the goal: cramped goal areas are easy
-    /// backward.
-    Backward,
+    /// Backward (pull) search from the goal with f = g + w*h (w = 1:
+    /// optimal): cramped goal areas are easy backward.
+    Backward(u32),
     /// Feature-space search over macro moves.
     Fess,
 }
 
 impl Strategy {
     const DEFAULT: [Strategy; 4] =
-        [Strategy::Optimal, Strategy::Bidir, Strategy::Fess, Strategy::Backward];
+        [Strategy::Optimal, Strategy::Fess, Strategy::Backward(1), Strategy::Backward(3)];
 
     fn parse(name: &str) -> Option<Self> {
         Some(match name {
             "optimal" => Strategy::Optimal,
             "bidir" => Strategy::Bidir,
             "weighted" => Strategy::Weighted,
-            "backward" => Strategy::Backward,
+            "backward" => Strategy::Backward(1),
+            _ if name.starts_with("backward:") => Strategy::Backward(name["backward:".len()..].parse().ok()?),
             "fess" => Strategy::Fess,
             _ => return None,
         })
@@ -59,7 +61,8 @@ impl Strategy {
             Strategy::Optimal => "fwd-optimal",
             Strategy::Bidir => "bidir",
             Strategy::Weighted => "weighted",
-            Strategy::Backward => "backward",
+            Strategy::Backward(1) => "backward",
+            Strategy::Backward(_) => "backward-weighted",
             Strategy::Fess => "fess",
         }
     }
@@ -78,7 +81,10 @@ impl Strategy {
             Strategy::Optimal => solver::solve(board, &Options { mode: Mode::OptimalPushes, ..opts.clone() }),
             Strategy::Bidir => staged(Mode::OptimalPushes, Mode::Weighted(2), bidir::solve),
             Strategy::Weighted => staged(Mode::Weighted(3), Mode::Weighted(5), solver::solve),
-            Strategy::Backward => solver::solve_backward(board, &Options { mode: Mode::OptimalPushes, ..opts.clone() }),
+            Strategy::Backward(w) => {
+                let mode = if *w <= 1 { Mode::OptimalPushes } else { Mode::Weighted(*w) };
+                solver::solve_backward(board, &Options { mode, ..opts.clone() })
+            }
             Strategy::Fess => fess::solve(board, opts),
         }
     }
@@ -238,7 +244,7 @@ fn main() {
     if args.is_empty() {
         eprintln!(
             "usage: sokoban-solver <levels.txt> [--level N] [--time-limit SECS]\n\
-             \x20 [--portfolio optimal,bidir,weighted,backward,fess]   (default: optimal,bidir,fess,backward)\n\
+             \x20 [--portfolio optimal,bidir,weighted,backward,backward:W,fess]   (default: optimal,fess,backward,backward:3)\n\
              \x20 [--mode auto|optimal|greedy|weighted:W|backward|bidir|fess]\n\
              \x20 [--memory-limit GB]   (default: half of RAM)  [--max-nodes N] [--no-corral]\n\
              \x20 [--solutions FILE] [--quiet] [--show-plan]"
