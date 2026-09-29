@@ -92,26 +92,34 @@ impl Matcher {
         self.total(&cost)
     }
 
-    /// Append the solved state (u, v, p; 3 * (m + 1) values) to `out`, so a
-    /// child position (one row changed) can warm-start from it with
-    /// `load` + `resolve_row` in O(m^2) instead of a full O(m^3) solve.
-    pub fn save(&self, out: &mut Vec<i64>) {
-        out.extend_from_slice(&self.u);
-        out.extend_from_slice(&self.v);
-        out.extend(self.p.iter().map(|&x| x as i64));
+    /// Append the solved state to `v_out` / `p_out` (m + 1 values each), so
+    /// a child position (one row changed) can warm-start from it with `load`
+    /// + `resolve_row` in O(m^2) instead of a full O(m^3) solve. Row
+    /// potentials are not stored: every row is matched in the optimum and
+    /// u_i + v_j = c_ij holds on matched pairs, so `load` recomputes them.
+    pub fn save(&self, v_out: &mut Vec<i64>, p_out: &mut Vec<u16>) {
+        v_out.extend_from_slice(&self.v);
+        p_out.extend(self.p.iter().map(|&x| x as u16));
     }
 
-    /// Restore a state written by `save` for an n x m problem.
-    pub fn load(&mut self, n: usize, m: usize, state: &[i64]) {
+    /// Restore a state written by `save` for an n x m problem with the
+    /// same costs it was solved with (`cost`).
+    pub fn load(&mut self, n: usize, m: usize, v: &[i64], p: &[u16], cost: impl Fn(usize, usize) -> Option<u32>) {
         let k = m + 1;
         self.n = n;
         self.m = m;
-        self.u.clear();
-        self.u.extend_from_slice(&state[..k]);
         self.v.clear();
-        self.v.extend_from_slice(&state[k..2 * k]);
+        self.v.extend_from_slice(v);
         self.p.clear();
-        self.p.extend(state[2 * k..3 * k].iter().map(|&x| x as usize));
+        self.p.extend(p.iter().map(|&x| x as usize));
+        self.u.clear();
+        self.u.resize(k, 0);
+        for j in 1..k {
+            let i = self.p[j];
+            if i != 0 {
+                self.u[i] = Self::padded(n, &cost, i, j) - self.v[j];
+            }
+        }
         self.way.resize(k, 0);
         self.minv.resize(k, 0);
         self.used.resize(k, false);

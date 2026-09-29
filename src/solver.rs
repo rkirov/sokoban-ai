@@ -519,7 +519,8 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
     }
 
     // Solved matching state per arena node (see Matcher::save).
-    let mut states: Vec<i64> = Vec::new();
+    let mut state_v: Vec<i64> = Vec::new();
+    let mut state_p: Vec<u16> = Vec::new();
     let mut pops = 0u64;
     while let Some((h, (parent, box_from, dir))) = open.pop() {
         pops += 1;
@@ -640,16 +641,15 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
         let m = board.start_boxes.len();
         let solved = match moved {
             Some(row) => {
-                let stride = 3 * (m + 1);
-                let at = parent as usize * stride;
-                matcher.load(node_boxes.len(), m, &states[at..at + stride]);
+                let at = parent as usize * (m + 1);
+                matcher.load(node_boxes.len(), m, &state_v[at..at + m + 1], &state_p[at..at + m + 1], node_cost);
                 matcher.resolve_row(row, node_cost)
             }
             None => matcher.solve(node_boxes.len(), m, node_cost),
         };
         // Every arena node gets a state slot (dead nodes keep a stale one;
         // they are never expanded further).
-        matcher.save(&mut states);
+        matcher.save(&mut state_v, &mut state_p);
         if solved.is_none() {
             continue;
         }
