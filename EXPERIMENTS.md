@@ -96,7 +96,8 @@ Same-machine reference: YASS 2.153 solves 117 SokHard levels at 10 s
 |--------|--------|--------|
 | Bucket open list (identical order) | identical node counts; backward 10–15% faster, 4× smaller queue entries; SokHard portfolio 94 vs 83 without it (noisy) | kept |
 | Transposed distance tables | identical nodes, slightly slower | rejected |
-| Warm-start matching from the parent's saved state (backward) | 17–25% faster; portfolio 94 vs 97 | dropped (patch kept) |
+| Warm-start matching from the parent's saved state (backward) | 17–25% faster; with one backward thread the portfolio showed 94 vs 97 (noise) | dropped at first |
+| Same warm start, re-tested once the default ran two backward threads | SokHard 101/103 → 116/115 (two interleaved runs each), Holland 60 → 61, Microban IV equal and faster (median ×0.72) | kept |
 | Warm-start matching (forward A\*) | not measured once the backward result was known | dropped |
 
 ## Ideas from Codex (asked for novel first-principles ideas)

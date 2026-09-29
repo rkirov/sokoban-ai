@@ -92,6 +92,31 @@ impl Matcher {
         self.total(&cost)
     }
 
+    /// Append the solved state (u, v, p; 3 * (m + 1) values) to `out`, so a
+    /// child position (one row changed) can warm-start from it with
+    /// `load` + `resolve_row` in O(m^2) instead of a full O(m^3) solve.
+    pub fn save(&self, out: &mut Vec<i64>) {
+        out.extend_from_slice(&self.u);
+        out.extend_from_slice(&self.v);
+        out.extend(self.p.iter().map(|&x| x as i64));
+    }
+
+    /// Restore a state written by `save` for an n x m problem.
+    pub fn load(&mut self, n: usize, m: usize, state: &[i64]) {
+        let k = m + 1;
+        self.n = n;
+        self.m = m;
+        self.u.clear();
+        self.u.extend_from_slice(&state[..k]);
+        self.v.clear();
+        self.v.extend_from_slice(&state[k..2 * k]);
+        self.p.clear();
+        self.p.extend(state[2 * k..3 * k].iter().map(|&x| x as usize));
+        self.way.resize(k, 0);
+        self.minv.resize(k, 0);
+        self.used.resize(k, false);
+    }
+
     /// Save (u, v, p) so children can each re-augment from the node's state.
     pub fn snapshot(&mut self) {
         self.su.clone_from(&self.u);

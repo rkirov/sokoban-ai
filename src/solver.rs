@@ -518,6 +518,8 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
         }
     }
 
+    // Solved matching state per arena node (see Matcher::save).
+    let mut states: Vec<i64> = Vec::new();
     let mut pops = 0u64;
     while let Some((h, (parent, box_from, dir))) = open.pop() {
         pops += 1;
@@ -530,8 +532,12 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
 
         // Materialize: for a pull entry, box_from moves to b+d and the player
         // ends at b+2d.
-        let (boxes, player, g) = if parent == NO_PARENT {
-            (goal_boxes.clone(), box_from, 0)
+        // Boxes stay in the parent's order (the matching's rows are box
+        // indices, so a child can warm-start from its parent's matching with
+        // only the moved row changed); keys and the goal test use a sorted
+        // copy.
+        let (boxes, player, g, moved) = if parent == NO_PARENT {
+            (goal_boxes.clone(), box_from, 0, None)
         } else {
             let p = &arena[parent as usize];
             let to = board.neighbors[box_from as usize][dir as usize];
@@ -539,9 +545,10 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
             let mut boxes = p.boxes.clone();
             let idx = boxes.iter().position(|&b| b == box_from).unwrap();
             boxes[idx] = to;
-            boxes.sort_unstable();
-            (boxes, player, p.g + 1)
+            (boxes, player, p.g + 1, Some(idx))
         };
+        let mut sorted = boxes.clone();
+        sorted.sort_unstable();
 
         for &b in box_list.iter() {
             box_at[b as usize] = false;
@@ -575,7 +582,7 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
         // merging a state with its mirror image loses the paths that reach
         // the actual start (a mirror-symmetric one-push level was reported
         // unsolvable; see tests::backward_search_on_symmetric_board).
-        match tt.entry((boxes.clone(), norm)) {
+        match tt.entry((sorted.clone(), norm)) {
             std::collections::hash_map::Entry::Occupied(mut e) => {
                 if *e.get() <= g {
                     stats.duplicates += 1;
@@ -603,8 +610,7 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
         // the forward start position (h == 0 with exact distances implies the
         // box set equals the start set).
         if h == 0 && reach_stamp[board.start_player as usize] == reach_gen {
-            let node = &arena[node_idx as usize];
-            if node.boxes.as_ref() == board.start_boxes.as_slice() {
+            if sorted.as_ref() == board.start_boxes.as_slice() {
                 stats.time = start_time.elapsed();
                 // Reversed pulls become forward pushes.
                 let mut pushes = Vec::with_capacity(g as usize);
@@ -631,7 +637,20 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
             let d = board.start_dist[j][node_boxes[i] as usize];
             (d != crate::level::INF).then_some(d)
         };
-        if matcher.solve(node_boxes.len(), board.start_boxes.len(), node_cost).is_none() {
+        let m = board.start_boxes.len();
+        let solved = match moved {
+            Some(row) => {
+                let stride = 3 * (m + 1);
+                let at = parent as usize * stride;
+                matcher.load(node_boxes.len(), m, &states[at..at + stride]);
+                matcher.resolve_row(row, node_cost)
+            }
+            None => matcher.solve(node_boxes.len(), m, node_cost),
+        };
+        // Every arena node gets a state slot (dead nodes keep a stale one;
+        // they are never expanded further).
+        matcher.save(&mut states);
+        if solved.is_none() {
             continue;
         }
         matcher.snapshot();
