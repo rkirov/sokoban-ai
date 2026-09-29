@@ -28,7 +28,7 @@ SokHard and the other LTS sets were never used for tuning until measured.
 |-----|-------|-----|
 | XSokoban | 16 | 67 |
 | Microban I–IV | 480 | 488 |
-| SokHard | 61 (first measured) | ~100 (98–103) |
+| SokHard | 61 (first measured) | 115–116 |
 | Holland / Sasquatch / Grigr2001 / SokEvo | 57 / 26 / 90 / 107 | 61 / 29 / 93 / 107 |
 
 Same-machine reference: YASS 2.153 solves 117 SokHard levels at 10 s

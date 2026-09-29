@@ -118,15 +118,15 @@ Per-level time limit 10 s, 4-core machine, full default portfolio.
 | Grigr2001 | 100 | **93** | — | 96 / 96 |
 | Holland | 81 | **61** | — | 65 / 68 |
 | Sasquatch | 50 | **29** | — | 41 / 43 |
-| SokHard | 163 | **98–103** | 117 | 134 / 163 |
+| SokHard | 163 | **115–116** | 117 | 134 / 163 |
 
 \* From the sokobano.de solver statistics (Large Test Suite), measured on a
 Ryzen 9 7900X with 8+ threads — not directly comparable. YASS was built from
 source and run single-threaded on the same 4-core machine as this solver.
 
 Progress in the September 2026 session (same machine, 10 s): XSokoban
-16 → 67, Microban 480 → 488, SokHard 61 → ~100 (runs vary by ±3–5
-on this shared machine). The remaining gap is on small,
+16 → 67, Microban 480 → 488, SokHard 61 → 115–116 (runs vary by a
+few levels on this shared machine), level with YASS's 117. The remaining gap is on small,
 dense levels (SokHard, Sasquatch), where YASS reaches solutions with far
 fewer search nodes; larger deadlock sets and stronger lower bounds are the
 next things to try there.
