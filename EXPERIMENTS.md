@@ -108,7 +108,7 @@ Same-machine reference: YASS 2.153 solves 117 SokHard levels at 10 s
 | Seed backward dead-set tables only from the actual start-player region | sound (projection of a real solution) and free | backward A\* with a fixed 400k-node budget on SokHard: 47 → 48, identical optimal pushes; wall-clock portfolio too noisy to resolve | kept (7 lines) |
 | Dual-based O(m) child lower bounds, exact matching only when popped (backward search) | sound (weak duality); identical optimal pushes | backward alone +3 Microban levels, faster on 3 of 4 sets; portfolio SokHard 117/116 vs 114/116, Holland equal and 8% faster | kept |
 | Backward "freeze": erase pullable boxes to a fixed point; leftovers never move | sound (erasure frees more than any placement); a solution-replay test confirmed no false positives | fixed 400k-node budget on SokHard 48 → 49, but backward 27% slower per node and no Microban gains | rejected |
-| Generation-time duplicate rejection in backward search | plausible | not tried |
+| Generation-time duplicate rejection in backward search (TT keyed by box set; flood the child's region only when its box set was seen) | sound; 60–70% of backward pops were duplicates and ~80% of those are catchable at generation | identical optimal pushes; identical time at a fixed 400k-node budget (the child floods cost what the saved pops did); backward alone on Microban −2 levels; portfolio SokHard 117/117 vs 116/116, Holland 61 = 61 | rejected: within noise, ~40 lines |
 | Player-side-aware single-box distances | known technique | not tried |
 | FESS advisors for reopening goals / two-move preparation witnesses | speculative | not tried |
 
