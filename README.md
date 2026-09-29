@@ -14,8 +14,7 @@ cargo build --release
 ./target/release/sokoban-solver levels/microban1.txt                  # solve all levels (portfolio)
 ./target/release/sokoban-solver levels/microban1.txt --level 42      # one level
 ./target/release/sokoban-solver levels/xsokoban.txt --time-limit 60  # per-level budget (seconds)
-./target/release/sokoban-solver f.txt --portfolio optimal,bidir,fess      # choose the racing strategies
-                                                                      # (also: weighted, backward, backward:W)
+./target/release/sokoban-solver f.txt --portfolio optimal,fess,backward:2 # choose the racing strategies
 ./target/release/sokoban-solver f.txt --mode optimal                 # push-optimal A* only
 ./target/release/sokoban-solver f.txt --mode fess                    # feature-space search only
 ./target/release/sokoban-solver f.txt --mode backward                # pull search from the goal
@@ -36,8 +35,8 @@ stops the others. Default: push-optimal A\* (reported solutions are optimal
 whenever it finishes first), FESS, and backward (pull) search twice —
 optimal and weighted (w = 3) — because the two orderings solve different
 cramped levels. The portfolio was chosen by measuring each strategy's
-*unique* solves and then head-to-head on every pack; bidirectional search
-and weighted forward A\* are available with `--portfolio`.
+*unique* solves and then head-to-head on every pack (bidirectional search
+and staged weighted forward A\* were removed: they added no solves).
 
 An "unsolvable" verdict only ends the thread that reached it: solutions are
 verified by replay, verdicts are not, so one unsound strategy cannot stop
@@ -104,9 +103,8 @@ that plan instead.
 ### Other searches
 
 `solver.rs`: A\* over pushes with the min-cost matching lower bound
-(incremental Hungarian, `matching.rs`), and the backward (pull) search.
-`bidir.rs`: forward and backward searches probing each other's
-transposition tables; it expands whichever side has the smaller frontier.
+(incremental Hungarian, `matching.rs`), and the backward (pull) search,
+optimal or weighted.
 
 ## Benchmarks
 

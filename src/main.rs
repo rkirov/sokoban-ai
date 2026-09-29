@@ -1,4 +1,3 @@
-mod bidir;
 mod corral;
 mod deadlock;
 mod deadsets;
@@ -22,17 +21,13 @@ use std::time::Duration;
 /// measuring each strategy's unique solves at 10 s/level: optimal A* (also
 /// gives push-optimal answers), FESS (large levels), and backward search
 /// twice — optimal and weighted (w = 3) — since cramped goal areas are easy
-/// backward and the two orderings solve different levels. Bidirectional
-/// search and weighted forward A* are opt-in (they added no solves).
+/// backward and the two orderings solve different levels. (Bidirectional
+/// search and staged weighted forward A* were measured and removed: they
+/// added no solves; see EXPERIMENTS.md.)
 #[derive(Clone, Copy)]
 enum Strategy {
     /// Forward push-optimal A*.
     Optimal,
-    /// Bidirectional meet-in-the-middle: g+h for half the budget, then g+2h
-    /// (different orderings crack different levels).
-    Bidir,
-    /// Weighted A*: w=3 for half the budget, then w=5.
-    Weighted,
     /// Backward (pull) search from the goal with f = g + w*h (w = 1:
     /// optimal): cramped goal areas are easy backward.
     Backward(u32),
@@ -47,8 +42,6 @@ impl Strategy {
     fn parse(name: &str) -> Option<Self> {
         Some(match name {
             "optimal" => Strategy::Optimal,
-            "bidir" => Strategy::Bidir,
-            "weighted" => Strategy::Weighted,
             "backward" => Strategy::Backward(1),
             _ if name.starts_with("backward:") => Strategy::Backward(name["backward:".len()..].parse().ok()?),
             "fess" => Strategy::Fess,
@@ -59,8 +52,6 @@ impl Strategy {
     fn name(&self) -> &'static str {
         match self {
             Strategy::Optimal => "fwd-optimal",
-            Strategy::Bidir => "bidir",
-            Strategy::Weighted => "weighted",
             Strategy::Backward(1) => "backward",
             Strategy::Backward(_) => "backward-weighted",
             Strategy::Fess => "fess",
@@ -68,19 +59,8 @@ impl Strategy {
     }
 
     fn run(&self, board: &Board, opts: &Options) -> Outcome {
-        // Two stages, each with half the budget; the second runs only if the
-        // first ran out without an answer.
-        let staged = |first: Mode, second: Mode, search: fn(&Board, &Options) -> Outcome| {
-            let half = Options { mode: first, time_limit: opts.time_limit.mul_f64(0.5), ..opts.clone() };
-            match search(board, &half) {
-                Outcome::Exhausted { .. } => search(board, &Options { mode: second, ..half }),
-                other => other,
-            }
-        };
         match self {
             Strategy::Optimal => solver::solve(board, &Options { mode: Mode::OptimalPushes, ..opts.clone() }),
-            Strategy::Bidir => staged(Mode::OptimalPushes, Mode::Weighted(2), bidir::solve),
-            Strategy::Weighted => staged(Mode::Weighted(3), Mode::Weighted(5), solver::solve),
             Strategy::Backward(w) => {
                 let mode = if *w <= 1 { Mode::OptimalPushes } else { Mode::Weighted(*w) };
                 solver::solve_backward(board, &Options { mode, ..opts.clone() })
@@ -244,8 +224,8 @@ fn main() {
     if args.is_empty() {
         eprintln!(
             "usage: sokoban-solver <levels.txt> [--level N] [--time-limit SECS]\n\
-             \x20 [--portfolio optimal,bidir,weighted,backward,backward:W,fess]   (default: optimal,fess,backward,backward:3)\n\
-             \x20 [--mode auto|optimal|greedy|weighted:W|backward|bidir|fess]\n\
+             \x20 [--portfolio optimal,backward,backward:W,fess]   (default: optimal,fess,backward,backward:3)\n\
+             \x20 [--mode auto|optimal|greedy|weighted:W|backward|fess]\n\
              \x20 [--memory-limit GB]   (default: half of RAM)  [--max-nodes N] [--no-corral]\n\
              \x20 [--solutions FILE] [--quiet] [--show-plan]"
         );
@@ -260,7 +240,6 @@ fn main() {
     let mut auto = true;
     let mut backward = false;
     let mut fess_mode = false;
-    let mut bidir_mode = false;
     let mut show_plan = false;
     let mut portfolio: Vec<Strategy> = Strategy::DEFAULT.to_vec();
     let mut memory_limit = default_memory_limit();
@@ -287,10 +266,6 @@ fn main() {
                     "fess" => {
                         fess_mode = true;
                         Mode::Greedy
-                    }
-                    "bidir" => {
-                        bidir_mode = true;
-                        Mode::OptimalPushes
                     }
                     _ if m.starts_with("weighted:") => {
                         Mode::Weighted(m["weighted:".len()..].parse().expect("weight"))
@@ -368,8 +343,6 @@ fn main() {
                 (solver::solve_backward(&board, &opts), "backward")
             } else if fess_mode {
                 (fess::solve(&board, &opts), "fess")
-            } else if bidir_mode {
-                (bidir::solve(&board, &opts), "bidir")
             } else {
                 (solver::solve(&board, &opts), "single")
             }

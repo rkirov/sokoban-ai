@@ -68,12 +68,13 @@ Same-machine reference: YASS 2.153 solves 117 SokHard levels at 10 s
 
 | Change | Result | Status |
 |--------|--------|--------|
-| Weighted A\* thread | no unique Microban solves | opt-in only |
+| Weighted A\* thread (w = 3 then 5) | no unique Microban solves | opt-in, later removed |
 | Backward (pull) A\* replacing the second FESS thread | SokHard +3, Microban +1 | kept |
-| Bidir expands the smaller frontier (Pohl) instead of alternating | SokHard +6 | kept |
+| Bidir expands the smaller frontier (Pohl) instead of alternating | SokHard +6 | kept, then bidir itself removed (below) |
 | Weighted backward thread (w = 3) *replacing* optimal backward | alone 70 vs 61, portfolio 97 → 87 | rejected: solo strength ≠ portfolio value |
 | Weighted backward (w = 3) *alongside* optimal backward, replacing bidir (chosen from unions of solo runs: 100 vs 95 on SokHard) | head-to-head on every pack: Microban 486 → 488, Holland 59 → 61, SokHard 99/100 → 103/98 (noise), others equal | kept as default |
 | Bidir forward side with A\*'s gate and frozen-wall rules | bidir alone 77 → 84, portfolio neutral | reverted |
+| Bidirectional search (the earlier session's meet-in-the-middle, 500 lines) | out of the default once weighted backward replaced it with no loss on any pack | removed (simplicity) |
 | Only a verified solution stops the portfolio; contradicting "unsolvable" claims reported | safety | kept |
 | Memory watchdog (process RSS, default half of RAM) | no machine OOM at long limits; same results | kept |
 
