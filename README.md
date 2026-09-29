@@ -125,26 +125,21 @@ Ryzen 9 7900X with 8+ threads — not directly comparable. YASS was built from
 source and run single-threaded on the same 4-core machine as this solver.
 
 Progress in the September 2026 session (same machine, 10 s): XSokoban
-16 → 67, Microban 480 → 488, SokHard 61 → 115–116 (runs vary by a
-few levels on this shared machine), level with YASS's 117. The remaining gap is on small,
-dense levels (SokHard, Sasquatch), where YASS reaches solutions with far
-fewer search nodes; larger deadlock sets and stronger lower bounds are the
-next things to try there.
+16 → 67, Microban 480 → 488, SokHard 61 → 115–116 (runs vary by a few
+levels on this shared machine) — level with YASS's 117.
 
 ## Open problems and next steps
 
-- **Small, dense levels** (SokHard, Sasquatch) are the gap: YASS reaches
-  solutions with 10-100x fewer search positions. A profile of A\* on failing
-  SokHard levels shows no dominant cost (children 35-38%, frozen scan +
-  matching ~22%, materialization ~15%, heap ~15%, corral ~9% at ~40k
-  expansions/s), so engine speed-ups (compact states, incremental hashing)
-  would give ~2x at most — yet a 60 s run solves 66 of the 74 SokHard levels
-  failed at 10 s (median 24.5 s), so a 2-3x faster engine would close much
-  of the gap. Also: deadlock patterns learned from exhausted subtrees,
-  YASS-style perimeter search.
-- **Large levels** (XSokoban at 67/90): FESS features beyond packing,
-  regions and hotspots (room connectivity, out-of-plan boxes), and sharing a
-  forward/backward meet table across threads.
+- **Large levels** (XSokoban 67/90, Holland 61/81): not time-bound — a 60 s
+  run solves only 4 of XSokoban's 23 misses. FESS's best positions on the
+  misses are provably dead (all but 2–4 boxes packed in a way that cannot
+  be completed), so the lever is recognising those dead ends early:
+  deadlock patterns learned from stalled positions (proofs currently cost
+  2–30 s, too slow at 10 s), and FESS features beyond packing, regions and
+  hotspots.
+- **Dense levels** (Sasquatch 29/50, SokHard misses): mostly time-bound —
+  most SokHard misses solve within 60 s, largely by the backward threads —
+  so backward-search speed keeps paying off.
 - **Reinforcement learning** only after the classical techniques are
   exhausted, and only as an advisor inside FESS (never a pruner).
 
