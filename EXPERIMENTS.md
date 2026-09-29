@@ -120,6 +120,9 @@ Same-machine reference: YASS 2.153 solves 117 SokHard levels at 10 s
   queue ~15%, corral ~9%.
 - XSokoban failures split between early stalls (preparation needed) and
   "all but 1–3 packed" positions that are dead.
+- Sasquatch is not time-bound either: a 60 s run (2.5 GB memory limit)
+  solves 1 of the 21 levels failed at 10 s; most runs hit the memory limit
+  after 25-50 s. Like XSokoban, it needs stronger search, not speed.
 - Memory, not time, bounds long runs: on Sasquatch #5 the portfolio reaches
   2.5 GB within 30-45 s (all four threads' arenas, tables and queues). The
   backward warm-start states were first stored as 3(m+1) i64 per node
