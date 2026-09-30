@@ -1,0 +1,990 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>:root{color-scheme:light}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>Sokoban Solver Field Notes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chivo:wght@400;600;800&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+:root {
+  --bg: #F4F6F8;
+  --surface: #FFFFFF;
+  --ink: #18202B;
+  --muted: #5A6573;
+  --rule: #D9DEE5;
+  --accent: #0E7C7B;
+  --accent-soft: #D6ECEB;
+  --crate: #B8761F;
+  --crate-soft: #F3E3CB;
+  --bad: #B3413A;
+  --bad-soft: #F5DEDC;
+  --good: #2F7D4F;
+  --good-soft: #DCEFE3;
+  --pend: #7A5BB0;
+  --pend-soft: #E9E2F5;
+  --wall: #2B3440;
+  --floor: #E6EAEF;
+  --code-bg: #EDF0F4;
+  --display: "Chivo", "Helvetica Neue", Arial, sans-serif;
+  --body: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #11151B; --surface: #181E26; --ink: #E3E7ED; --muted: #9AA5B3; --rule: #2A323D;
+    --accent: #3FB8B4; --accent-soft: #173534; --crate: #D99A45; --crate-soft: #3A2C18;
+    --bad: #E0716A; --bad-soft: #3B1E1C; --good: #5FBF86; --good-soft: #17301F;
+    --pend: #A98BE0; --pend-soft: #2A2240; --wall: #5A6472; --floor: #222A34; --code-bg: #1D242D;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #11151B; --surface: #181E26; --ink: #E3E7ED; --muted: #9AA5B3; --rule: #2A323D;
+  --accent: #3FB8B4; --accent-soft: #173534; --crate: #D99A45; --crate-soft: #3A2C18;
+  --bad: #E0716A; --bad-soft: #3B1E1C; --good: #5FBF86; --good-soft: #17301F;
+  --pend: #A98BE0; --pend-soft: #2A2240; --wall: #5A6472; --floor: #222A34; --code-bg: #1D242D;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--body); font-size: 17px; line-height: 1.6;
+  padding-inline: 20px; padding-block: 0 80px;
+}
+.layout { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 48px; }
+@media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); gap: 0; } nav.toc { display: none; } }
+nav.toc { position: sticky; top: env(safe-area-inset-top, 0px); align-self: start; padding-top: 40px; max-height: 100vh; overflow-y: auto; font-family: var(--display); font-size: 13.5px; }
+nav.toc p { text-transform: uppercase; letter-spacing: .08em; font-size: 11.5px; color: var(--muted); margin: 0 0 10px; }
+nav.toc ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; counter-reset: s; }
+nav.toc a { color: var(--muted); text-decoration: none; }
+nav.toc a:hover, nav.toc a:focus-visible { color: var(--accent); }
+main { min-width: 0; }
+.prose { max-width: 70ch; }
+header.hero { padding-block: 48px 24px; border-bottom: 1px solid var(--rule); margin-bottom: 8px; }
+.eyebrow { font-family: var(--display); text-transform: uppercase; letter-spacing: .1em; font-size: 12px; color: var(--accent); font-weight: 600; }
+h1 { font-family: var(--display); font-weight: 800; font-size: clamp(34px, 5vw, 52px); line-height: 1.05; margin: 10px 0 16px; text-wrap: balance; letter-spacing: -.01em; }
+h2 { font-family: var(--display); font-weight: 800; font-size: 30px; line-height: 1.15; margin: 64px 0 12px; text-wrap: balance; padding-top: 16px; border-top: 3px solid var(--ink); }
+h3 { font-family: var(--display); font-weight: 600; font-size: 21px; margin: 36px 0 8px; text-wrap: balance; }
+h4 { font-family: var(--display); font-weight: 600; font-size: 16px; margin: 24px 0 4px; }
+.lede { font-size: 20px; line-height: 1.5; color: var(--ink); max-width: 62ch; }
+.meta { font-family: var(--display); font-size: 13.5px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 18px; }
+a { color: var(--accent); }
+p { margin: 0 0 14px; }
+ul, ol { padding-left: 22px; margin: 0 0 14px; }
+li { margin-bottom: 5px; }
+code, .mono { font-family: var(--mono); font-size: .86em; }
+:not(pre) > code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+pre.code { background: var(--code-bg); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.55; margin: 12px 0 18px; }
+pre.code .c { color: var(--muted); }
+pre.code .k { color: var(--accent); font-weight: 600; }
+.where { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 12.5px; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 1px 7px; white-space: nowrap; }
+.where::before { content: "↳"; opacity: .7; }
+.pointers { display: flex; flex-wrap: wrap; gap: 6px 8px; margin: 6px 0 16px; }
+figure { margin: 22px 0 26px; }
+figcaption { font-family: var(--display); font-size: 13.5px; color: var(--muted); margin-top: 8px; max-width: 70ch; }
+.note { border-left: 3px solid var(--crate); background: var(--crate-soft); padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 16px 0; max-width: 70ch; font-size: 16px; }
+.note strong { font-family: var(--display); }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; font-family: var(--display); font-size: 14px; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+td.num, th.num { text-align: right; }
+
+/* score table */
+.score td.bars { width: 46%; min-width: 220px; }
+.bar { position: relative; height: 9px; background: var(--floor); border-radius: 2px; margin: 3px 0; }
+.bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; }
+.bar.me i { background: var(--accent); }
+.bar.yass i { background: var(--crate); }
+.bar.fest i { background: var(--muted); opacity: .6; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-family: var(--display); font-size: 13px; color: var(--muted); margin: 8px 0; }
+.legend span::before { content: ""; display: inline-block; width: 12px; height: 9px; border-radius: 2px; margin-right: 6px; vertical-align: 0; background: var(--c); }
+
+/* boards */
+.boards { display: flex; flex-wrap: wrap; gap: 26px; align-items: flex-start; }
+.board-wrap { overflow-x: auto; max-width: 100%; }
+.board { display: grid; gap: 1px; --cell: 20px; width: max-content; }
+.board .cell { width: var(--cell); height: var(--cell); position: relative; border-radius: 2px; }
+.cell.void { background: transparent; }
+.cell.wall { background: var(--wall); }
+.cell.floor { background: var(--floor); }
+.cell.goal::after { content: ""; position: absolute; inset: 32%; border-radius: 50%; background: var(--accent); }
+.cell.box::before { content: ""; position: absolute; inset: 12%; background: var(--crate); border-radius: 3px; box-shadow: inset 0 0 0 2px rgba(0,0,0,.18); z-index: 1; }
+.cell.box.goal::before { box-shadow: inset 0 0 0 3px var(--accent); }
+.cell.player::before { content: ""; position: absolute; inset: 20%; border-radius: 50%; background: var(--ink); z-index: 1; }
+.cell.dead { background-image: repeating-linear-gradient(45deg, transparent 0 3px, color-mix(in srgb, var(--bad) 55%, transparent) 3px 5px); }
+.cell.hl { outline: 2px solid var(--bad); outline-offset: -2px; }
+.cell .d { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--mono); font-size: 10px; color: var(--ink); z-index: 2; }
+.board-title { font-family: var(--display); font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; font-family: var(--display); font-size: 14px; margin: 10px 0; }
+button, .chip { font-family: var(--display); font-size: 13.5px; border: 1px solid var(--rule); background: var(--surface); color: var(--ink); border-radius: 5px; padding: 5px 11px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button:focus-visible, input:focus-visible, .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button[aria-pressed="true"], .chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+input[type="range"] { accent-color: var(--accent); width: min(360px, 100%); }
+.stat { font-variant-numeric: tabular-nums; color: var(--muted); }
+
+/* charts */
+.chart { width: 100%; max-width: 820px; }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart text { font-family: var(--display); font-size: 11.5px; fill: var(--muted); }
+.chart .lbl { fill: var(--ink); font-size: 11.5px; }
+.chart .axis { stroke: var(--rule); }
+.chart .grid { stroke: var(--rule); stroke-dasharray: 2 3; }
+
+/* ledger */
+.filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 12px; }
+.pill { display: inline-block; font-family: var(--display); font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; padding: 1px 8px; border-radius: 10px; white-space: nowrap; }
+.pill.kept { color: var(--good); background: var(--good-soft); }
+.pill.rejected { color: var(--bad); background: var(--bad-soft); }
+.pill.pending { color: var(--pend); background: var(--pend-soft); }
+.pill.removed { color: var(--crate); background: var(--crate-soft); }
+.ledger td:first-child { width: 34%; }
+.ledger td { font-size: 13.5px; }
+.count { color: var(--muted); font-family: var(--display); font-size: 13px; }
+
+.twocol { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px 28px; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; }
+.card h4 { margin-top: 0; }
+.card p, .card li { font-size: 15.5px; }
+.flow { counter-reset: step; list-style: none; padding: 0; max-width: 70ch; }
+.flow li { counter-increment: step; position: relative; padding-left: 38px; margin-bottom: 10px; }
+.flow li::before { content: counter(step); position: absolute; left: 0; top: 1px; width: 26px; height: 26px; border-radius: 50%; background: var(--ink); color: var(--bg); font-family: var(--display); font-size: 13px; font-weight: 600; display: grid; place-items: center; }
+.timeline { list-style: none; padding: 0; border-left: 2px solid var(--rule); margin-left: 6px; max-width: 74ch; }
+.timeline li { position: relative; padding: 0 0 18px 22px; }
+.timeline li::before { content: ""; position: absolute; left: -7px; top: 7px; width: 12px; height: 12px; border-radius: 3px; background: var(--crate); }
+.timeline .when { font-family: var(--display); font-weight: 600; font-size: 13px; color: var(--accent); text-transform: uppercase; letter-spacing: .06em; }
+pre.mermaid { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px; overflow-x: auto; }
+.kbd { font-family: var(--mono); font-size: 12px; border: 1px solid var(--rule); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+</head>
+<body>
+<div class="layout">
+<nav class="toc" aria-label="Contents">
+  <p>Contents</p>
+  <ol>
+    <li><a href="#glance">At a glance</a></li>
+    <li><a href="#story">How it unfolded</a></li>
+    <li><a href="#primer">Sokoban for solvers</a></li>
+    <li><a href="#arch">Architecture</a></li>
+    <li><a href="#board">Board precomputation</a></li>
+    <li><a href="#astar">A* and the matching bound</a></li>
+    <li><a href="#backward">Backward search</a></li>
+    <li><a href="#fess">FESS over macro moves</a></li>
+    <li><a href="#plans">Packing plans</a></li>
+    <li><a href="#deadlocks">Deadlock detection</a></li>
+    <li><a href="#portfolio">Portfolio and safety</a></li>
+    <li><a href="#progress">Progress charts</a></li>
+    <li><a href="#method">How things were measured</a></li>
+    <li><a href="#ledger">Experiments ledger</a></li>
+    <li><a href="#bugs">Bugs and lessons</a></li>
+    <li><a href="#now">Where it stands</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="hero">
+  <div class="eyebrow">sokoban-ai · research log · July–September 2026</div>
+  <h1>Sokoban Solver Field Notes</h1>
+  <p class="lede">What happened to the Rust solver in <code>~/sokoban-ai</code>: which ideas went in and why, which were measured and thrown out, and where each piece lives in the code. On SokHard it went from 61 to 116 of 163 levels at 10 seconds, level with YASS on the same machine.</p>
+  <div class="meta">
+    <span><a href="https://github.com/rkirov/sokoban-ai">github.com/rkirov/sokoban-ai</a></span>
+    <span>Code pointers link to commit <code>2350191</code></span>
+    <span>24 commits since the July baseline</span>
+    <span>~5,700 lines of Rust in <code>src/</code></span>
+    <span>36 tests</span>
+  </div>
+</header>
+
+<section id="glance">
+<h2>At a glance</h2>
+<div class="prose">
+<p>The solver races four searches in parallel threads and reports the first solution that replays correctly. The main work of the September sessions was:</p>
+<ul>
+  <li><strong>FESS rewrite.</strong> A new feature-space search over macro moves, guided by packing plans computed backward from the goal. This took XSokoban from 16 to 67 solved.</li>
+  <li><strong>Exact small deadlock tables.</strong> Tables for pairs and triples of boxes, in both push and pull directions, plus a fast filter that skips most lookups. This took SokHard from 61 to 98.</li>
+  <li><strong>Faster backward search.</strong> A second, weighted backward thread, warm-started matchings and cheap dual lower bounds. This took SokHard from about 100 to 116.</li>
+  <li><strong>Safety.</strong> Only a verified solution can stop the race, a memory watchdog caps each run, and <code>EXPERIMENTS.md</code> records every technique tried, kept or not.</li>
+</ul>
+</div>
+
+<h3>Scoreboard, 10 seconds per level</h3>
+<div class="legend">
+  <span style="--c: var(--accent)">This solver (4 threads, this machine)</span>
+  <span style="--c: var(--crate)">YASS 2.153 (same machine, 1 thread)</span>
+  <span style="--c: color-mix(in srgb, var(--muted) 60%, transparent)">Festival · Sokolution (published, faster 8+ thread machine)</span>
+</div>
+<div class="scroll">
+<table class="score" id="score"></table>
+</div>
+<p class="count" style="margin-top:8px">Bars are the solved fraction of each pack. Festival and Sokolution numbers come from the sokobano.de Large Test Suite statistics on a Ryzen 9 7900X, so compare them loosely. YASS was only run on Microban and SokHard.</p>
+</section>
+
+<section id="story">
+<h2>How it unfolded</h2>
+<ol class="timeline">
+  <li><div class="when">2 July 2026 · baseline</div>
+    <p>The first session produced a racing portfolio: forward A* with a matching lower bound, bidirectional search, weighted A*, and a unit-push FESS. Pruning included freeze deadlocks, PI-corrals and a corral mini-search, with CI and verified LURD output. Starting scores at 10 s: Microban 480/493, XSokoban 16/90, SokHard 61/163.</p></li>
+  <li><div class="when">27 Sep · review and bug hunt</div>
+    <p>A review from first principles found three real bugs. The backward search merged mirror-image states, the corral verdict cache ignored the region, and naive tunnel macros were unsound (that one had already been caught in July). An early session crash led to a 3 GB cgroup cap on every benchmark run and one-at-a-time CPU jobs.</p></li>
+  <li><div class="when">28 Sep · FESS rebuilt</div>
+    <p>FESS was rewritten over macro moves, with goal-cluster packing layers, exact consistent-filling tables, a relaxed backward plan for parking, hotspots and frozen-box walls. XSokoban went from 16 to 63, then 67.</p></li>
+  <li><div class="when">28 Sep · deadlock tables</div>
+    <p>Exact pair and triple tables were added, forward and backward, plus gate pushes and partner filtering. SokHard went from 61 to 98. Commit <code>85dba28</code> landed the bulk, and <code>05a27cb</code> added partner filtering.</p></li>
+  <li><div class="when">28–29 Sep · portfolio reshaped</div>
+    <p>Bidirectional search (500 lines) was removed: weighted backward search replaced it with no loss on any pack. The default became optimal A*, FESS, backward, and weighted backward (<code>f33c8df</code>, <code>9ca54ac</code>).</p></li>
+  <li><div class="when">29 Sep · backward engine</div>
+    <p>The backward search got warm-started matchings (<code>752d5fe</code>), compact matching storage (<code>e608282</code>), and O(m) dual bounds for children (<code>c896c41</code>). SokHard reached 115–117, level with YASS's 117.</p></li>
+  <li><div class="when">29 Sep · calibration and ideas</div>
+    <p>60-second runs showed which packs are time-bound (SokHard) and which need smarter search (XSokoban, Sasquatch). Codex was asked for novel ideas. Two were kept, and the others were measured and rejected. Player-aware distances were mid-measurement when the work was paused.</p></li>
+</ol>
+</section>
+
+<section id="primer">
+<h2>Sokoban for solvers</h2>
+<div class="prose">
+<p>A position is the set of box squares plus the player's position. Two positions where the player can walk between the same squares behave identically, so the solver names the player by the smallest square index of its reachable region. That pair (sorted boxes, region name) is the transposition-table key everywhere.</p>
+<p>The unit of cost is a <em>push</em>. Walking is free and is reconstructed afterwards (<span class="where">src/verify.rs:13</span> <code>pushes_to_moves</code>), then the full move string is replayed against the original level text (<span class="where">src/verify.rs:91</span>) before anything is reported.</p>
+<p>Three ideas carry most of the weight:</p>
+<ul>
+  <li><strong>Lower bounds.</strong> An optimistic estimate of pushes remaining, used to order A* and to prove positions dead when it is infinite.</li>
+  <li><strong>Deadlocks.</strong> Positions that can never be solved. Every one detected removes a whole subtree.</li>
+  <li><strong>Search shape.</strong> Which positions to look at first. Most hard levels are lost here, not to raw speed.</li>
+</ul>
+<p>Below is the solver's actual solution to XSokoban #1, 97 pushes found in 31 ms, replayed move by move. Lowercase letters in the output are walks and uppercase are pushes.</p>
+</div>
+<figure>
+  <div class="controls">
+    <button id="playBtn" type="button" aria-pressed="false">Play</button>
+    <button id="resetBtn" type="button">Reset</button>
+    <label for="scrub">Move</label>
+    <input type="range" id="scrub" min="0" max="0" value="0">
+    <span class="stat" id="animStat">move 0 · pushes 0</span>
+  </div>
+  <div class="board-wrap"><div class="board" id="animBoard"></div></div>
+  <figcaption>XSokoban #1 replayed from the solver's LURD output. Amber squares are boxes, teal dots are goals, and a teal ring marks a box on a goal.</figcaption>
+</figure>
+</section>
+
+<section id="arch">
+<h2>Architecture</h2>
+<div class="prose">
+<p>Everything starts from a <code>Board</code>: the level normalized to reachable squares, with neighbour tables and precomputed distance tables. Per-level tables are built once per strategy. Four strategies then race in threads with the full time budget each.</p>
+</div>
+<figure>
+<pre class="mermaid">
+flowchart LR
+  L[Level text] --> B["Board::from_level · level.rs:126"]
+  B --> P1["Distances and dead squares · goal_dist, start_dist"]
+  B --> P2["Gate pushes · forced_pushes level.rs:372"]
+  B --> T1["Dead-set tables · deadsets.rs (fwd + bwd)"]
+  B --> T2["Packing plan / relaxed plan · packing.rs, retro.rs"]
+  B --> T3["Hotspots · hotspots.rs"]
+  P1 --> A["Optimal A* · solver.rs:162"]
+  P1 --> F["FESS · fess.rs:92"]
+  P1 --> K1["Backward w=1 · solver.rs:442"]
+  P1 --> K3["Backward w=3"]
+  T1 --> A
+  T1 --> F
+  T1 --> K1
+  T1 --> K3
+  T2 --> F
+  T3 --> F
+  A --> R{"first solution · solve_auto main.rs:85"}
+  F --> R
+  K1 --> R
+  K3 --> R
+  R --> V["Replay check · verify.rs:91"]
+</pre>
+<figcaption>Data flow. Only a solution stops the race: an "unsolvable" verdict ends just the thread that reached it.</figcaption>
+</figure>
+
+<h3>File map</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>File</th><th class="num">Lines</th><th>Role</th></tr></thead>
+<tbody>
+<tr><td><code>src/main.rs</code></td><td class="num">407</td><td>CLI, strategy portfolio (<code>Strategy</code> :28, <code>solve_auto</code> :85), memory watchdog (:131), <code>--show-plan</code></td></tr>
+<tr><td><code>src/level.rs</code></td><td class="num">412</td><td>Parsing, <code>Board</code> (:24), distance tables and dead squares (:227–295), symmetries, gate pushes (:372)</td></tr>
+<tr><td><code>src/solver.rs</code></td><td class="num">693</td><td>Bucket queue (:111), forward A* (:162), backward pull search (:442)</td></tr>
+<tr><td><code>src/matching.rs</code></td><td class="num">330</td><td>Incremental Hungarian: <code>solve</code>, <code>resolve_row</code>, <code>save/load</code>, <code>row_lower_bound</code></td></tr>
+<tr><td><code>src/fess.rs</code></td><td class="num">468</td><td>Feature-space search, cells, advisors, cyclic scheduling</td></tr>
+<tr><td><code>src/macros.rs</code></td><td class="num">639</td><td>Macro-move generator with articulation-point regions</td></tr>
+<tr><td><code>src/packing.rs</code></td><td class="num">381</td><td>Goal-filling order per cluster, exact consistent-filling tables</td></tr>
+<tr><td><code>src/retro.rs</code></td><td class="num">234</td><td>Relaxed backward plan with parking</td></tr>
+<tr><td><code>src/hotspots.rs</code></td><td class="num">118</td><td>Boxes that block other boxes</td></tr>
+<tr><td><code>src/deadsets.rs</code></td><td class="num">439</td><td>Exact pair and triple deadlock tables, forward and backward</td></tr>
+<tr><td><code>src/deadlock.rs</code></td><td class="num">192</td><td>Freeze deadlocks, frozen-on-goal boxes as walls</td></tr>
+<tr><td><code>src/corral.rs</code></td><td class="num">510</td><td>PI-corral pruning and corral mini-search</td></tr>
+<tr><td><code>src/verify.rs</code></td><td class="num">169</td><td>Walk reconstruction and replay</td></tr>
+<tr><td><code>src/tests.rs</code></td><td class="num">386</td><td>Regression and property tests (plus per-module tests)</td></tr>
+</tbody>
+</table>
+</div>
+<p class="count" style="margin-top:8px">Line numbers in this page refer to commit <code>2350191</code>, and each pointer links to that line on GitHub.</p>
+</section>
+
+<section id="board">
+<h2>Board precomputation</h2>
+<div class="prose">
+<p>Each goal gets a table of <em>relaxed push distances</em>: how many pushes a lone box needs to reach it, when the player can teleport to any floor square. The search runs backward from the goal as pulls. A box at <code>q</code> can be pulled to neighbour <code>n</code> when <code>n</code> and the square beyond it are floor. Squares no goal can be reached from are <em>dead</em>, and no push onto them is ever generated.</p>
+<div class="pointers"><span class="where">src/level.rs:227</span><span class="where">src/level.rs:264</span> <code>start_dist</code> is the mirror table for the backward search.</div>
+<p>The board below is computed in your browser with the same rule as <code>level.rs</code>. Toggle the overlays.</p>
+</div>
+<figure>
+  <div class="controls">
+    <button type="button" id="ovDead" aria-pressed="true">Dead squares</button>
+    <button type="button" id="ovDist" aria-pressed="false">Distance to nearest goal</button>
+  </div>
+  <div class="board-wrap"><div class="board" id="deadBoard"></div></div>
+  <figcaption>XSokoban #1. Hatched squares are dead: a box there can never reach a goal (corners, and wall edges with no goal along them). Numbers are the relaxed push distance to the nearest goal.</figcaption>
+</figure>
+
+<h3>Player-aware distances (parked experiment)</h3>
+<div class="prose">
+<p>The relaxation above ignores where the player can actually walk. After a push the player stands where the box was, and can only reach the box sides that connect to that square without going through the box. The branch <code>player-aware-dists</code> tracks (box square, player-side component) states instead.</p>
+<p>The bound stays a lower bound, and it can only get tighter. On SokHard it changes the tables on 70 of 163 levels and finds new dead squares on 27. The two boards below are computed in the browser with both rules.</p>
+</div>
+<div class="boards">
+  <figure style="margin:0"><div class="board-title">Relaxed (current)</div><div class="board-wrap"><div class="board" id="pa1"></div></div></figure>
+  <figure style="margin:0"><div class="board-title">Player-aware (branch)</div><div class="board-wrap"><div class="board" id="pa2"></div></div></figure>
+</div>
+<p class="count" style="margin-top:10px; max-width:70ch">The box has to turn the corner at the end of the corridor, pushed down from the one-square niche above the corner. The relaxed rule lets the player teleport into the niche, so it says 4 pushes. The player can only reach that niche through the corner square the box would be standing on, so the player-aware rule marks the box's square dead (outlined).</p>
+<div class="pointers"><span class="where">player-aware-dists: src/level.rs side_components</span><span class="where">aware_goal_dist</span><span class="where">aware_start_dist</span></div>
+
+<h3>Gate pushes</h3>
+<div class="prose">
+<p>Suppose a box is pushed onto a non-goal square that cuts the pusher's side off from the box's other sides, using walls alone. Then the only useful next move for that box is to keep pushing it forward. This is a property of the position alone, so it is safe to use with a transposition table. Naive tunnel macros, which force boxes through wall-flanked runs, are not safe: Microban 1 #10 below needs a box parked inside such a corridor. The test <span class="where">src/tests.rs:195</span> <code>tunnel_parking_is_required</code> pins this.</p>
+<div class="pointers"><span class="where">src/level.rs:372 forced_pushes</span><span class="where">src/tests.rs:371</span></div>
+</div>
+<figure>
+  <div class="board-wrap"><div class="board" id="m10Board"></div></div>
+  <figcaption>Microban 1 #10. The three boxes on row 4 sit in a one-wide corridor. The solution parks a box inside the corridor to let the player pass, which a "push through the tunnel" macro would forbid.</figcaption>
+</figure>
+</section>
+
+<section id="astar">
+<h2>A* and the matching bound</h2>
+<div class="prose">
+<p>Forward A* over pushes orders positions by <code>g + h</code>. Here <code>h</code> is a minimum-cost matching of boxes to goals over the distance tables, solved with the Hungarian algorithm. If no perfect matching exists, some box can reach no free goal and the position is dead. The search materializes children lazily: queue entries are <code>(parent, box, direction)</code>, and a child is built and checked only when popped.</p>
+<div class="pointers"><span class="where">src/solver.rs:162 solve</span><span class="where">src/solver.rs:111 BucketQueue</span><span class="where">src/matching.rs:72 solve</span><span class="where">src/matching.rs:161 resolve_row</span></div>
+<p>Two engine facts matter:</p>
+<ul>
+  <li><strong>Bucket open list.</strong> Keys are small integers (f, then h), so an array of buckets replaces the binary heap. It keeps the same order and identical node counts, runs 10–15% faster, and uses queue entries four times smaller.</li>
+  <li><strong>One-row updates.</strong> A push changes one box, so one row of the cost matrix. The matcher re-augments a single row from the parent's solution (O(m²)) instead of solving from scratch (O(m³)). This is exact only if rectangular problems are padded to square with zero-cost dummy rows; a property test pins that.</li>
+</ul>
+<p>With frozen boxes on goals, <code>FrozenWalls</code> recomputes distances treating them as walls, cached per frozen set. That catches the common stall where every box but one is packed and the last goal is sealed off.</p>
+<div class="pointers"><span class="where">src/deadlock.rs:130 FrozenWalls</span><span class="where">src/tests.rs:355</span></div>
+</div>
+</section>
+
+<section id="backward">
+<h2>Backward search</h2>
+<div class="prose">
+<p>The backward search starts from the solved position and <em>pulls</em> boxes, looking for the start position. Cramped goal rooms, hard to fill forward, are easy to empty backward. It uses the mirror tables: <code>start_dist</code> for the bound and backward dead-set tables seeded from the start squares.</p>
+<p>It became the SokHard workhorse. In a 60 s calibration, 48 of the 66 extra levels were solved by a backward thread. So its speed was worth engineering, and it now runs twice in the portfolio: optimal (w = 1), and weighted <code>f = g + 3h</code>, because the two orderings solve different levels.</p>
+<div class="pointers"><span class="where">src/solver.rs:442 solve_backward</span><span class="where">src/main.rs:38 DEFAULT</span></div>
+</div>
+
+<h3>What happens when an entry is popped</h3>
+<ol class="flow">
+  <li><strong>Materialize.</strong> Copy the parent's boxes in parent order, move one box. Keeping the parent's order means matching row <em>i</em> is still box <em>i</em>, which the warm start needs. A sorted copy is used for the key.</li>
+  <li><strong>Flood</strong> the player region and name it by its smallest square.</li>
+  <li><strong>Duplicate check</strong> in the transposition table (60–70% of pops on hard SokHard levels are duplicates).</li>
+  <li><strong>Exact bound.</strong> Load the parent's saved matching (column potentials plus assignment; row potentials are recomputed from complementary slackness) and re-solve the one changed row.</li>
+  <li><strong>Requeue if the bound rose.</strong> Children were queued with a cheaper lower bound, and if the exact value is higher the entry goes back in at its true key. Nothing is stored yet, so this is cheap.</li>
+  <li><strong>Store and expand.</strong> Save the matching state for this node's children, test for the start position, generate pulls, filter by backward dead squares and dead sets, and queue each child with its O(m) dual bound.</li>
+</ol>
+
+<h3>The O(m) dual bound</h3>
+<div class="prose">
+<p>For each child, a full re-solve would cost O(m²). Instead, keep the parent's dual solution (u, v) and replace only the moved row's potential by that row's minimum reduced cost. The duals stay feasible, and by weak duality any feasible dual objective is a lower bound on the new optimum.</p>
+</div>
+<pre class="code"><span class="c">// src/matching.rs:134  LB = total − u_r + min_j (c'_rj − v_j)</span>
+<span class="k">pub fn</span> row_lower_bound(&amp;self, r0: usize, total: u64, cost: impl Fn(usize, usize) -&gt; Option&lt;u32&gt;) -&gt; Option&lt;u64&gt; {
+    <span class="k">let</span> r = r0 + 1;
+    <span class="k">let mut</span> best = i64::MAX;
+    <span class="k">for</span> j <span class="k">in</span> 1..=self.m {
+        <span class="k">if let</span> Some(c) = cost(r0, j - 1) { best = best.min(c <span class="k">as</span> i64 - self.v[j]); }
+    }
+    (best != i64::MAX).then(|| (total <span class="k">as</span> i64 - self.u[r] + best).max(0) <span class="k">as</span> u64)
+}</pre>
+<div class="prose">
+<p>Measured: identical optimal push counts, 3 more Microban levels for backward alone, faster on 3 of 4 sets, and SokHard portfolio 117/116 against 114/116.</p>
+<div class="note"><strong>Memory mattered.</strong> The first warm-start version stored 3(m+1) 64-bit values per node, about 900 bytes at 36 boxes, and long runs were killed by the memory cap. Storing only <code>v</code> and the assignment keeps node counts identical and lasts 46% longer before the limit (<span class="where">src/matching.rs:100 save</span>).</div>
+</div>
+</section>
+
+<section id="fess">
+<h2>FESS over macro moves</h2>
+<div class="prose">
+<p>Best-first search is weak on rearrangement puzzles: the right plan often makes the distance estimate worse first. FESS (after Festival) projects every position onto a small <em>feature space</em> and spreads effort across the occupied cells. Here a cell is (boxes packed according to the plan, number of free-space regions). The scheduler cycles over cells and takes one move from each per visit, so progress in any feature earns its own share of time.</p>
+<div class="pointers"><span class="where">src/fess.rs:92 solve</span><span class="where">src/fess.rs:350 pop_cyclic</span><span class="where">src/fess.rs:53 better</span></div>
+</div>
+<pre class="code"><span class="c">/// Feature cell: (packed boxes, free-space regions).</span>
+<span class="k">type</span> Cell = (u32, u32);
+
+<span class="c">/// Lexicographic feature order: more packed boxes, then fewer regions.</span>
+<span class="k">fn</span> better(a: Cell, b: Cell) -&gt; bool {
+    a.0 &gt; b.0 || (a.0 == b.0 &amp;&amp; a.1 &lt; b.1)
+}</pre>
+<div class="twocol">
+  <div class="card"><h4>Advisors</h4><p>Inside a cell, moves are taken by accumulated weight. Advised moves cost 0 and all others cost 1. There are three advisors: the best move that packs a box, the best move that merges free regions, and the best move that reduces the number of <em>hotspot</em> boxes blocking others.</p></div>
+  <div class="card"><h4>Macro moves</h4><p>One box pushed any number of times while the player walks freely, so depth counts box moves, not pushes. Per box, one DFS computes articulation points, which tell which sides of each square the player can walk between. It also gives each move's region count in O(1) instead of a flood fill per child. <span class="where">src/macros.rs:93 dfs</span></p></div>
+  <div class="card"><h4>Completeness</h4><p>Every generated move is eventually expanded unless it is a proven deadlock or a duplicate. So an empty queue proves the level unsolvable, and plans and advisors only change the order of work.</p></div>
+  <div class="card"><h4>Hotspots</h4><p>Box A is a hotspot if some other box could reach fewer goals were A's square a wall. This is precomputed per square, and the runtime count is O(boxes²) bit tests. <span class="where">src/hotspots.rs:26</span></p></div>
+</div>
+</section>
+
+<section id="plans">
+<h2>Packing plans</h2>
+<div class="prose">
+<p>The planner answers one question: in which order must the goals be filled? Think backward from the solved position. The goal filled last must hold a box that can still be pulled out to some starting square while every other goal is full. Removing a box only frees space, so removability is monotone. Peeling off every removable box in rounds therefore gives a layering without search, computed per cluster of adjacent goals.</p>
+<div class="pointers"><span class="where">src/packing.rs:150 PackingPlan::compute</span><span class="where">src/packing.rs:283 can_leave</span><span class="where">src/packing.rs:229 packed</span></div>
+<p>Three refinements each fixed a measured failure:</p>
+<ul>
+  <li><strong>Per cluster, not global.</strong> An independent goal pocket landed in the last global layer and never counted as packed (XSokoban #10, then solved in 0.18 s).</li>
+  <li><strong>"Can leave" means reaching a start square.</strong> On XSokoban #44 a goal sits above a niche reachable only from that goal. Pulling into it is not leaving, and this fix took XSokoban from 47 to 51.</li>
+  <li><strong>Exact consistent fillings.</strong> For clusters up to 4,000 states, the plan keeps the set of fillings from which the cluster can still be completed. Layers lose order inside a layer. This gave 52 and ran 30% faster.</li>
+</ul>
+<p>Orders cannot express <strong>parking</strong>: moving a box out of the goal area into a niche and back later. XSokoban #44 fills its 3×3 goal block this way. <code>retro.rs</code> solves a relaxed backward problem with macro pulls, where other boxes are ignored and a box reaching a start square disappears. That yields a step-by-step plan in milliseconds, and when the plan parks boxes, FESS measures progress along it instead (52 → 59).</p>
+<div class="pointers"><span class="where">src/retro.rs:57 RelaxedPlan::compute</span><span class="where">src/retro.rs:226 xsokoban_44_plan_parks_boxes</span></div>
+</div>
+<figure>
+  <div class="board-wrap"><div class="board" id="x44Board"></div></div>
+  <figcaption>XSokoban #44. The 3×3 goal block on the right can only be filled in certain orders, and some boxes must be parked in niches and brought back.</figcaption>
+</figure>
+</section>
+
+<section id="deadlocks">
+<h2>Deadlock detection</h2>
+<div class="prose">
+<p>Every detector is sound: it never calls a solvable position dead. The table grows from cheapest to most expensive.</p>
+</div>
+<div class="scroll">
+<table>
+<thead><tr><th>Detector</th><th>Idea</th><th>Code</th></tr></thead>
+<tbody>
+<tr><td>Dead squares</td><td>No goal reachable from a square even alone</td><td><code>level.rs:227</code></td></tr>
+<tr><td>Freeze</td><td>A box that can never move again, off a goal. Two-axis recursive test, with boxes on the recursion path treated as walls</td><td><code>deadlock.rs:64</code></td></tr>
+<tr><td>Frozen walls</td><td>Boxes frozen on goals become walls; recompute distances, then the matching proves "last goal sealed"</td><td><code>deadlock.rs:147</code></td></tr>
+<tr><td>Dead sets (k = 2, 3)</td><td>Exact tables: can these k boxes alone, with the player in this region, still be finished?</td><td><code>deadsets.rs:63</code></td></tr>
+<tr><td>PI-corrals</td><td>When a fenced unreachable area's pushes are all inward and executable now, only those pushes need to be generated</td><td><code>corral.rs:96</code></td></tr>
+<tr><td>Corral mini-search</td><td>Small capped search proving a corral can never be resolved</td><td><code>corral.rs:315</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Exact dead-set tables</h3>
+<div class="prose">
+<p>Take any k boxes alone on the board with the player in some region. If even they cannot all reach goals, the full position is dead too, because removing boxes only makes a position easier. Which (box set, player region) states <em>can</em> be finished is computed once per level by breadth-first pulls from every all-on-goals state. Anything not reached is a deadlock.</p>
+<p>The mirror table, seeded from start squares and expanded by pushes, prunes the backward searches. Seeding it only from the start player's own region was a free, sound gain suggested by Codex.</p>
+</div>
+<div class="boards">
+  <figure style="margin:0"><div class="board-title">Dead pair</div><div class="board-wrap"><div class="board" id="pairDead"></div></div></figure>
+  <figure style="margin:0"><div class="board-title">Not dead: two lanes</div><div class="board-wrap"><div class="board" id="pairAlive"></div></div></figure>
+</div>
+<p class="count" style="margin-top:10px; max-width:70ch">From <span class="where">src/deadsets.rs:308</span>. In a one-wide corridor the rear box cannot move until the front one does, and the player can never reach the front one's far side. Neither box is frozen and the matching is feasible, so only the pair table catches it.</p>
+
+<div class="prose">
+<h4>Partner filtering</h4>
+<p>Table lookups for every child were the largest per-child cost. Each square now keeps a bitset of the squares it appears with in any dead set. A moved box can only complete a dead set with its partners, usually none, so most checks exit at once. This took SokHard from 89 to 98. <span class="where">src/deadsets.rs:232 moved_box_dead</span></p>
+<h4>How the tables are kept honest</h4>
+<ul>
+  <li>Exhaustive agreement with brute-force solving on small boards (<span class="where">src/deadsets.rs:355</span>).</li>
+  <li>Every position along real solutions must be alive in both directions (<span class="where">src/deadsets.rs:405</span>). This test was added after a refactor bug made the backward tables reject everything.</li>
+</ul>
+</div>
+</section>
+
+<section id="portfolio">
+<h2>Portfolio and safety</h2>
+<div class="prose">
+<p>The four strategies were chosen by measuring each one's <em>unique</em> solves and then head-to-head on every pack. Solo strength is not portfolio value. Weighted backward alone beat optimal backward 70 to 61, but <em>replacing</em> it dropped the portfolio from 97 to 87. Running both is what won.</p>
+</div>
+<pre class="code"><span class="c">// src/main.rs:38</span>
+<span class="k">const</span> DEFAULT: [Strategy; 4] =
+    [Strategy::Optimal, Strategy::Fess, Strategy::Backward(1), Strategy::Backward(3)];</pre>
+<div class="twocol">
+  <div class="card"><h4>Only solutions stop the race</h4><p>Solutions are verified by replay; "unsolvable" verdicts are not. A buggy table once made one thread claim every SokHard level unsolvable, and the whole portfolio collapsed to 1/163. Now a verdict only ends its own thread, and a later solution prints a soundness warning. <span class="where">src/main.rs:85</span></p></div>
+  <div class="card"><h4>Memory watchdog</h4><p>A background thread polls resident memory from <code>/proc/self/status</code>. At the limit (default half of RAM, <code>--memory-limit</code>) it stops every search, which then reports a timeout. <span class="where">src/main.rs:131</span></p></div>
+  <div class="card"><h4>Optimal when possible</h4><p>Earlier strategies win ties, and A* is first. So a reported solution is push-optimal whenever A* finished within the budget.</p></div>
+</div>
+</section>
+
+<section id="progress">
+<h2>Progress charts</h2>
+<div class="prose"><p>Each point is the measurement taken when the change landed, at 10 s per level with the default portfolio of the time. Wall-clock runs on this shared machine vary by about ±5 on SokHard, and ranges show where two interleaved runs were taken.</p></div>
+<figure class="chart" id="chartSokhard"></figure>
+<figure class="chart" id="chartXsok"></figure>
+<h3>Time-bound or guidance-bound?</h3>
+<div class="prose"><p>The same levels that failed at 10 s were rerun at 60 s. If six times the time solves most of them, the pack is time-bound and engine speed pays. If not, the search needs better guidance or dead-end recognition.</p></div>
+<figure class="chart" id="chartCal"></figure>
+</section>
+
+<section id="method">
+<h2>How things were measured</h2>
+<div class="prose">
+<p>The rules the user set: think from first principles, measure on real level packs, don't cargo-cult other solvers, and keep a technique only if the default portfolio solves more pack levels. On ties, the simpler code wins. Every technique goes in <code>EXPERIMENTS.md</code>, kept or not.</p>
+<ul>
+  <li><strong>Packs.</strong> Microban I–IV (493), XSokoban (90), and from the Large Test Suite: SokHard (163), Holland (81), Sasquatch (50), Grigr2001 (100), SokEvo (107). The LTS sets were not used for tuning until measured.</li>
+  <li><strong>Noise.</strong> The same build measured 94, 97 and 98 on SokHard. A/B runs are interleaved (A, B, A, B) and repeated.</li>
+  <li><strong>Deterministic checks.</strong> Search changes are also compared at fixed node budgets. A pure speed-up must reproduce identical node counts, then is judged by time.</li>
+  <li><strong>Optimality guard.</strong> Any pruning rule must leave optimal push counts unchanged, level by level, on all four Microban sets.</li>
+  <li><strong>Machine safety.</strong> Every run goes through a harness that takes a file lock (one CPU-heavy job at a time) and runs under a 3 GB cgroup with no swap.</li>
+</ul>
+</div>
+</section>
+
+<section id="ledger">
+<h2>Experiments ledger</h2>
+<div class="prose"><p>Every technique tried, from <a href="https://github.com/rkirov/sokoban-ai/blob/main/EXPERIMENTS.md"><code>EXPERIMENTS.md</code></a>. Filter by outcome or area.</p></div>
+<div class="filters" id="statusFilters" role="group" aria-label="Filter by outcome"></div>
+<div class="filters" id="areaFilters" role="group" aria-label="Filter by area"></div>
+<p class="count" id="ledgerCount"></p>
+<div class="scroll"><table class="ledger"><thead><tr><th>Technique</th><th>Result</th><th>Outcome</th></tr></thead><tbody id="ledgerBody"></tbody></table></div>
+</section>
+
+<section id="bugs">
+<h2>Bugs and lessons</h2>
+<div class="scroll">
+<table>
+<thead><tr><th>Bug</th><th>How it was found</th><th>Guard now</th></tr></thead>
+<tbody>
+<tr><td>Backward search merged mirror-image states. Symmetries preserve walls and goals but not start squares.</td><td>A one-push symmetric level was reported unsolvable</td><td>Raw keys in backward search; <code>tests.rs:236</code></td></tr>
+<tr><td>Corral verdict cache keyed without the region</td><td>Instrumentation showed ~1.5k hits per Microban II with a verdict from another region</td><td>Region in the key; <code>tests.rs:267</code></td></tr>
+<tr><td>Dead-set refactor rejected every backward push transition</td><td>Portfolio collapsed to 1/163 through one false "unsolvable"</td><td>Solution-replay test; only solutions stop the race</td></tr>
+<tr><td>Naive tunnel macros (July)</td><td>Microban 1 #10 became unsolvable</td><td>Gate rule instead; <code>tests.rs:195</code></td></tr>
+</tbody>
+</table>
+</div>
+<div class="prose">
+<h3>Lessons encoded in the code</h3>
+<ul>
+  <li>The freeze checker's treat-as-wall marks must be scoped to the recursion path. Stale marks cause false deadlocks.</li>
+  <li>Single-row re-augmentation of a rectangular Hungarian problem is only sound with square padding.</li>
+  <li>A corral verdict must be cached per region. One fence can enclose regions with different verdicts.</li>
+  <li>Unreachable <code>*</code> squares are decorative and must be dropped, not rejected (Microban 1 #155).</li>
+  <li>Some of the hand-written test expectations were wrong while the tables were right. Tests now use exhaustive search or real solutions as the oracle.</li>
+</ul>
+</div>
+</section>
+
+<section id="now">
+<h2>Where it stands</h2>
+<div class="twocol">
+  <div class="card"><h4>Git state</h4>
+    <ul>
+      <li><code>main</code> holds all validated work and this report (<code>docs/index.html</code>), pushed on 30 September.</li>
+      <li>The local working branch <code>learned-deadlocks</code> was merged into <code>main</code>. Its name was a leftover (that idea was ruled out).</li>
+      <li><code>player-aware-dists</code> @ <code>0eb9e10</code>: the parked experiment, behind a <code>PLAYER_AWARE=1</code> switch. It is local only.</li>
+    </ul></div>
+  <div class="card"><h4>Open measurement</h4>
+    <p>Player-aware distances: optimal pushes are identical on all Microban sets, and it was faster on 3 of 4. SokHard is inconclusive: 114 against a baseline of 103 measured while the machine was swapping. It needs the interleaved SokHard/Holland/XSokoban A/B rerun, about an hour.</p></div>
+  <div class="card"><h4>Open problems</h4>
+    <ul>
+      <li><strong>Large levels</strong> (XSokoban 67/90, Holland 61/81) are not time-bound. FESS's best positions on misses are provably dead, so the lever is recognizing dead ends early. Learned deadlock patterns work in principle, but proofs cost 2–30 s each.</li>
+      <li><strong>Dense levels</strong> (SokHard, Sasquatch): SokHard is time-bound, so backward speed still pays. Sasquatch is memory-bound.</li>
+      <li><strong>Reinforcement learning</strong> only after the classical techniques are exhausted, and only as an advisor inside FESS, never as a pruner.</li>
+    </ul></div>
+</div>
+</section>
+</main>
+</div>
+
+<script>
+(function () {
+  const LEVELS = {
+    x1: [
+      "    #####","    #   #","    #$  #","  ###  $##","  #  $ $ #","### # ## #   ######","#   # ## #####  ..#","# $  $          ..#","##### ### #@##  ..#","    #     #########","    #######"],
+    x44: [
+      " #####"," #   #"," # # #######"," #      $@######"," # $ ##$ ###   #"," # #### $    $ #"," # ##### #  #$ ####","##  #### ##$      #","#  $#  $  # ## ## #","#         # #...# #","######  ###  ...  #","     #### # #...# #","          # ### # #","          #       #","          #########"],
+    m10: [
+      "      #####","      #.  #","      #.# #","#######.# #","# @ $ $ $ #","# # # # ###","#       #","#########"],
+    pocket: [
+      "######","#### #","#@$  #","#### #","####.#","######"],
+    pairDead: ["########","#@ $$..#","########"],
+    pairAlive: ["########","#@ $  .#","#  $  .#","########"]
+  };
+  const X1_SOLUTION = "ullluuuLUllDlldddrRRRRRRRRRRRRurDllllllllllllllulldRRRRRRRRRRRRRRRlllllllluuululldDDuulldddrRRRRRRRRRRRurDlllllllluuulLulDDDuulldddrRRRRRRRRRRRllllllluuululuurDDldldddrrruuuLLulDDDuulldddrRRRRRRRRRRdrUluRRldllllllluuuluuullDDDDDuulldddrRRRRRRRRRRdrUluR";
+  const DIRS = [[0,-1],[0,1],[-1,0],[1,0]]; // U D L R, as level.rs
+  const OPP = [1,0,3,2];
+
+  function parse(rows) {
+    const h = rows.length, w = Math.max(...rows.map(r => r.length));
+    const grid = rows.map(r => r.padEnd(w, " ").split(""));
+    let player = null; const boxes = new Set(), goals = new Set();
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const c = grid[y][x];
+      if (c === "@" || c === "+") player = [x, y];
+      if (c === "$" || c === "*") boxes.add(y * w + x);
+      if (c === "." || c === "+" || c === "*") goals.add(y * w + x);
+    }
+    // Reachable floor from the player (walls block, boxes don't), as level.rs.
+    const floor = new Array(w * h).fill(false);
+    const st = [player[1] * w + player[0]]; floor[st[0]] = true;
+    while (st.length) {
+      const c = st.pop(), x = c % w, y = (c / w) | 0;
+      for (const [dx, dy] of DIRS) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const n = ny * w + nx;
+        if (!floor[n] && grid[ny][nx] !== "#") { floor[n] = true; st.push(n); }
+      }
+    }
+    const nb = (c, d) => {
+      const x = c % w + DIRS[d][0], y = ((c / w) | 0) + DIRS[d][1];
+      if (x < 0 || y < 0 || x >= w || y >= h) return -1;
+      const n = y * w + x; return floor[n] ? n : -1;
+    };
+    return { w, h, grid, floor, player: player[1] * w + player[0], boxes, goals, nb };
+  }
+
+  // Relaxed pull BFS per goal (level.rs:227); returns min over goals.
+  function relaxedDist(L) {
+    const INF = Infinity, best = new Array(L.w * L.h).fill(INF);
+    for (const g of L.goals) {
+      const dist = new Array(L.w * L.h).fill(INF); dist[g] = 0; const q = [g];
+      for (let i = 0; i < q.length; i++) {
+        const c = q[i];
+        for (let d = 0; d < 4; d++) {
+          const n = L.nb(c, d); if (n < 0) continue;
+          if (L.nb(n, d) < 0) continue;
+          if (dist[n] === INF) { dist[n] = dist[c] + 1; q.push(n); }
+        }
+      }
+      for (let c = 0; c < dist.length; c++) best[c] = Math.min(best[c], dist[c]);
+    }
+    return best;
+  }
+
+  // Player-aware distances (branch player-aware-dists: side_components + aware_goal_dist).
+  function awareDist(L) {
+    const N = L.w * L.h, sideComp = [];
+    for (let q = 0; q < N; q++) {
+      const sc = [255, 255, 255, 255];
+      if (L.floor[q]) {
+        for (let d = 0; d < 4; d++) {
+          const s = L.nb(q, d); if (s < 0 || sc[d] !== 255) continue;
+          const seen = new Set([s]), st = [s];
+          while (st.length) { const c = st.pop(); for (let e = 0; e < 4; e++) { const m = L.nb(c, e); if (m >= 0 && m !== q && !seen.has(m)) { seen.add(m); st.push(m); } } }
+          for (let e = d; e < 4; e++) { const t = L.nb(q, e); if (t >= 0 && seen.has(t)) sc[e] = d; }
+        }
+      }
+      sideComp.push(sc);
+    }
+    const INF = Infinity, best = new Array(N).fill(INF);
+    for (const g of L.goals) {
+      const dist = new Map(), q = [];
+      for (let c = 0; c < 4; c++) if (sideComp[g].includes(c)) { dist.set(g * 4 + c, 0); q.push([g, c]); }
+      for (let i = 0; i < q.length; i++) {
+        const [dest, c] = q[i], dd = dist.get(dest * 4 + c);
+        for (let e = 0; e < 4; e++) {
+          if (sideComp[dest][e] !== c) continue;
+          const src = L.nb(dest, e); if (src < 0 || L.nb(src, e) < 0) continue;
+          const pc = sideComp[src][e], k = src * 4 + pc;
+          if (!dist.has(k)) { dist.set(k, dd + 1); q.push([src, pc]); }
+        }
+      }
+      for (const [k, v] of dist) { const sq = (k / 4) | 0; best[sq] = Math.min(best[sq], v); }
+    }
+    return best;
+  }
+
+  function render(el, L, state, opts = {}) {
+    el.style.gridTemplateColumns = `repeat(${L.w}, var(--cell))`;
+    el.textContent = "";
+    for (let c = 0; c < L.w * L.h; c++) {
+      const div = document.createElement("div");
+      const x = c % L.w, y = (c / L.w) | 0;
+      let cls = "cell ";
+      if (L.floor[c]) cls += "floor"; else if (L.grid[y][x] === "#") cls += "wall"; else cls += "void";
+      if (L.goals.has(c)) cls += " goal";
+      if (state.boxes.has(c)) cls += " box";
+      if (state.player === c) cls += " player";
+      if (opts.dead && L.floor[c] && opts.dead[c] === Infinity) cls += " dead";
+      if (opts.hl && opts.hl.has(c)) cls += " hl";
+      div.className = cls;
+      if (opts.nums && L.floor[c] && opts.nums[c] !== Infinity) {
+        const s = document.createElement("span"); s.className = "d"; s.textContent = opts.nums[c]; div.appendChild(s);
+      }
+      el.appendChild(div);
+    }
+  }
+
+  // Code pointers (file.rs:line) link to the exact commit on GitHub.
+  const SHA = "2350191462f35fc0b30c6a4d2a74c41a39d38e9e";
+  const REPO = "https://github.com/rkirov/sokoban-ai/blob/" + SHA + "/";
+  document.querySelectorAll(".where, td code, pre.code .c").forEach(node => {
+    const m = node.textContent.match(/(?:src\/)?([a-z_]+\.rs):(\d+)/);
+    if (!m || node.closest("a") || node.textContent.startsWith("player-aware")) return;
+    const a = document.createElement("a");
+    a.href = REPO + "src/" + m[1] + "#L" + m[2];
+    a.target = "_blank"; a.rel = "noopener";
+    a.style.textDecoration = "none"; a.style.color = "inherit";
+    node.parentNode.insertBefore(a, node); a.appendChild(node);
+  });
+
+  // Animated solution replay.
+  const X1 = parse(LEVELS.x1);
+  const animEl = document.getElementById("animBoard");
+  const scrub = document.getElementById("scrub"), stat = document.getElementById("animStat"), playBtn = document.getElementById("playBtn");
+  const frames = [];
+  (function buildFrames() {
+    let boxes = new Set(X1.boxes), p = X1.player, pushes = 0;
+    frames.push({ boxes: new Set(boxes), player: p, pushes });
+    const map = { u: 0, d: 1, l: 2, r: 3 };
+    for (const ch of X1_SOLUTION) {
+      const d = map[ch.toLowerCase()], n = X1.nb(p, d);
+      if (n < 0) break;
+      if (boxes.has(n)) { const b2 = X1.nb(n, d); boxes.delete(n); boxes.add(b2); pushes++; }
+      p = n;
+      frames.push({ boxes: new Set(boxes), player: p, pushes });
+    }
+  })();
+  scrub.max = frames.length - 1;
+  function show(i) {
+    const f = frames[i]; render(animEl, X1, f);
+    stat.textContent = `move ${i} of ${frames.length - 1} · pushes ${f.pushes}`;
+  }
+  let timer = null;
+  function stop() { clearInterval(timer); timer = null; playBtn.textContent = "Play"; playBtn.setAttribute("aria-pressed", "false"); }
+  playBtn.addEventListener("click", () => {
+    if (timer) { stop(); return; }
+    if (+scrub.value >= frames.length - 1) scrub.value = 0;
+    playBtn.textContent = "Pause"; playBtn.setAttribute("aria-pressed", "true");
+    timer = setInterval(() => {
+      const i = +scrub.value + 1;
+      if (i >= frames.length) { stop(); return; }
+      scrub.value = i; show(i);
+    }, 45);
+  });
+  document.getElementById("resetBtn").addEventListener("click", () => { stop(); scrub.value = 0; show(0); });
+  scrub.addEventListener("input", () => { show(+scrub.value); });
+  show(0);
+
+  // Dead squares / distance overlay.
+  const deadEl = document.getElementById("deadBoard"), rd = relaxedDist(X1);
+  const bDead = document.getElementById("ovDead"), bDist = document.getElementById("ovDist");
+  function drawDead() {
+    render(deadEl, X1, { boxes: X1.boxes, player: X1.player }, {
+      dead: bDead.getAttribute("aria-pressed") === "true" ? rd : null,
+      nums: bDist.getAttribute("aria-pressed") === "true" ? rd : null
+    });
+  }
+  for (const b of [bDead, bDist]) b.addEventListener("click", () => { b.setAttribute("aria-pressed", b.getAttribute("aria-pressed") === "true" ? "false" : "true"); drawDead(); });
+  drawDead();
+
+  // Player-aware comparison.
+  const P = parse(LEVELS.pocket), pr = relaxedDist(P), pa = awareDist(P);
+  const boxSq = [...P.boxes][0];
+  render(document.getElementById("pa1"), P, { boxes: P.boxes, player: P.player }, { dead: pr, nums: pr });
+  render(document.getElementById("pa2"), P, { boxes: P.boxes, player: P.player }, { dead: pa, nums: pa, hl: new Set(pa[boxSq] === Infinity ? [boxSq] : []) });
+  document.querySelectorAll("#pa1, #pa2").forEach(e => e.style.setProperty("--cell", "26px"));
+
+  for (const [id, key] of [["m10Board", "m10"], ["x44Board", "x44"], ["pairDead", "pairDead"], ["pairAlive", "pairAlive"]]) {
+    const L = parse(LEVELS[key]); const el = document.getElementById(id);
+    render(el, L, { boxes: L.boxes, player: L.player }, { hl: key === "pairDead" ? L.boxes : null });
+    if (key.startsWith("pair")) el.style.setProperty("--cell", "26px");
+  }
+
+  // Scoreboard.
+  const SCORE = [
+    ["Microban I–IV", 493, 488, 477, null, null],
+    ["XSokoban", 90, 67, null, 88, 85],
+    ["SokEvo", 107, 107, null, 107, 107],
+    ["Grigr2001", 100, 93, null, 96, 96],
+    ["Holland", 81, 61, null, 65, 68],
+    ["Sasquatch", 50, 29, null, 41, 43],
+    ["SokHard", 163, 116, 117, 134, 163]
+  ];
+  const st2 = document.getElementById("score");
+  st2.innerHTML = "<thead><tr><th>Pack</th><th class='num'>Levels</th><th class='num'>This solver</th><th class='num'>YASS</th><th class='num'>Festival / Sokolution</th><th>Solved fraction</th></tr></thead>";
+  const tb = document.createElement("tbody");
+  for (const [name, n, me, yass, fest, soko] of SCORE) {
+    const tr = document.createElement("tr");
+    const pct = v => (100 * v / n).toFixed(1) + "%";
+    tr.innerHTML = `<td>${name}</td><td class="num">${n}</td><td class="num"><strong>${name === "SokHard" ? "115–116" : me}</strong></td><td class="num">${yass ?? "—"}</td><td class="num">${fest != null ? fest + " / " + soko : "—"}</td>` +
+      `<td class="bars"><div class="bar me"><i style="width:${pct(me)}"></i></div>` +
+      (yass != null ? `<div class="bar yass"><i style="width:${pct(yass)}"></i></div>` : "") +
+      (fest != null ? `<div class="bar fest"><i style="width:${pct(Math.max(fest, soko))}"></i></div>` : "") + `</td>`;
+    tb.appendChild(tr);
+  }
+  st2.appendChild(tb);
+
+  // Charts.
+  const NS = "http://www.w3.org/2000/svg";
+  function el(tag, attrs, parent, text) {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (text != null) e.textContent = text;
+    parent && parent.appendChild(e); return e;
+  }
+  function progressChart(id, title, points, yMin, yMax, ticks, ref, color) {
+    const W = 820, H = 330, m = { l: 112, r: 24, t: 34, b: 110 };
+    const fig = document.getElementById(id);
+    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": title }, fig);
+    el("text", { x: m.l, y: 18, class: "lbl", "font-weight": "600" }, svg, title);
+    const x = i => m.l + (i + 0.5) * (W - m.l - m.r) / points.length;
+    const y = v => m.t + (yMax - v) * (H - m.t - m.b) / (yMax - yMin);
+    for (const t of ticks) {
+      el("line", { x1: 46, x2: W - m.r, y1: y(t), y2: y(t), class: "grid" }, svg);
+      el("text", { x: 40, y: y(t) + 4, "text-anchor": "end" }, svg, t);
+    }
+    if (ref) {
+      el("line", { x1: m.l, x2: W - m.r, y1: y(ref.v), y2: y(ref.v), stroke: "var(--crate)", "stroke-width": 1.5, "stroke-dasharray": "6 4" }, svg);
+      el("text", { x: W - m.r, y: y(ref.v) - 6, "text-anchor": "end", fill: "var(--crate)", style: "fill: var(--crate)" }, svg, ref.label);
+    }
+    let path = `M ${x(0)} ${y(points[0].v)}`;
+    for (let i = 1; i < points.length; i++) path += ` L ${x(i)} ${y(points[i - 1].v)} L ${x(i)} ${y(points[i].v)}`;
+    el("path", { d: path, fill: "none", stroke: color, "stroke-width": 2 }, svg);
+    points.forEach((p, i) => {
+      if (p.lo != null) el("line", { x1: x(i), x2: x(i), y1: y(p.lo), y2: y(p.hi), stroke: color, "stroke-width": 6, "stroke-linecap": "round", opacity: .35 }, svg);
+      el("circle", { cx: x(i), cy: y(p.v), r: 4.5, fill: color }, svg);
+      el("text", { x: x(i), y: y(p.hi ?? p.v) - 9, "text-anchor": "middle", class: "lbl" }, svg, p.lo != null ? `${p.lo}–${p.hi}` : p.v);
+      el("text", { x: x(i), y: H - m.b + 16, "text-anchor": "end", transform: `rotate(-35 ${x(i)} ${H - m.b + 16})` }, svg, p.label);
+    });
+    el("line", { x1: 46, x2: W - m.r, y1: H - m.b, y2: H - m.b, class: "axis" }, svg);
+    const cap = document.createElement("figcaption"); cap.textContent = ref ? "Dashed line: " + ref.label + ". " + (fig.dataset.cap || "") : (fig.dataset.cap || ""); fig.appendChild(cap);
+  }
+  const accent = "var(--accent)";
+  document.getElementById("chartSokhard").dataset.cap = "Approximate order within the 28–29 September sessions. Levels solved of 163.";
+  progressChart("chartSokhard", "SokHard: levels solved at 10 s (of 163)", [
+    { v: 61, label: "Start (first measured)" },
+    { v: 71, label: "Pair tables" },
+    { v: 77, label: "Backward pair table" },
+    { v: 86, label: "Triples + gate pushes" },
+    { v: 89, label: "Backward thread, tuning" },
+    { v: 98, label: "Partner filtering" },
+    { v: 102, lo: 101, hi: 103, label: "Weighted backward" },
+    { v: 115.5, lo: 115, hi: 116, label: "Backward warm start" },
+    { v: 116.5, lo: 116, hi: 117, label: "O(m) dual bounds" }
+  ], 50, 130, [60, 80, 100, 120], { v: 117, label: "YASS 2.153, same machine: 117" }, accent);
+  document.getElementById("chartXsok").dataset.cap = "FESS changes measured with FESS alone until the final default-portfolio run. Levels solved of 90.";
+  progressChart("chartXsok", "XSokoban: levels solved at 10 s (of 90)", [
+    { v: 16, label: "July baseline" },
+    { v: 47, label: "Macro-move FESS" },
+    { v: 51, label: "Leave = reach a start square" },
+    { v: 52, label: "Exact filling tables" },
+    { v: 59, label: "Relaxed plan (parking)" },
+    { v: 62, label: "Hotspots" },
+    { v: 63, label: "Hotspot bitsets" },
+    { v: 64, label: "O(1) region counts" },
+    { v: 65, label: "Frozen walls" },
+    { v: 67, label: "Final default portfolio" }
+  ], 0, 90, [0, 30, 60, 90], { v: 88, label: "Festival (published, faster machine): 88" }, accent);
+
+  (function calChart() {
+    const data = [["SokHard", 66, 74], ["XSokoban", 4, 23], ["Sasquatch", 1, 21]];
+    const W = 820, H = 170, m = { l: 96, r: 90, t: 30, b: 28 };
+    const fig = document.getElementById("chartCal");
+    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Share of 10-second misses solved at 60 seconds" }, fig);
+    el("text", { x: m.l, y: 16, class: "lbl", "font-weight": "600" }, svg, "Share of 10 s misses solved when given 60 s");
+    const bw = (H - m.t - m.b) / data.length, x = f => m.l + f * (W - m.l - m.r);
+    for (const t of [0, .25, .5, .75, 1]) {
+      el("line", { x1: x(t), x2: x(t), y1: m.t, y2: H - m.b, class: "grid" }, svg);
+      el("text", { x: x(t), y: H - m.b + 16, "text-anchor": "middle" }, svg, (t * 100) + "%");
+    }
+    data.forEach(([name, s, n], i) => {
+      const yy = m.t + i * bw + bw * 0.2, hh = bw * 0.6;
+      el("text", { x: m.l - 10, y: yy + hh / 2 + 4, "text-anchor": "end", class: "lbl" }, svg, name);
+      el("rect", { x: x(0), y: yy, width: x(s / n) - x(0), height: hh, fill: i === 0 ? "var(--accent)" : "var(--crate)", rx: 2 }, svg);
+      el("text", { x: x(s / n) + 8, y: yy + hh / 2 + 4, class: "lbl" }, svg, `${s} of ${n}`);
+    });
+    const cap = document.createElement("figcaption");
+    cap.textContent = "SokHard is time-bound (48 of the 66 were solved by a backward thread). XSokoban needs better guidance, and Sasquatch runs hit the 2.5 GB memory cap after 25–50 s.";
+    fig.appendChild(cap);
+  })();
+
+  // Ledger.
+  const LEDGER = [
+    ["FESS", "FESS rewritten over macro moves with cells (packed, free regions), packing and region-merge advisors", "XSokoban 16 → 47 (old FESS was unit-push)", "kept"],
+    ["FESS", "Goal layers per goal cluster, not global", "XSokoban #10 solved in 0.18 s", "kept"],
+    ["FESS", "\"Can leave\" = pulled back to a start square", "47 → 51", "kept"],
+    ["FESS", "Exact consistent-filling tables per cluster, with core credit", "51 → 52, 30% faster (cap 4k states, 9% faster than 20k)", "kept"],
+    ["FESS", "Relaxed backward plan with parking, used as progress when the plan parks boxes", "52 → 59", "kept"],
+    ["FESS", "Relaxed-plan progress on every level", "58 (−1): a fixed sequence is more restrictive than the partial order", "rejected"],
+    ["FESS", "Plan removals only at start squares ≥ 3 / ≥ 6 steps from goals", "59 / 60 (noise); later as a second FESS thread, then removed", "rejected"],
+    ["FESS", "Hotspots: advisor and tie-break", "60 → 62 → 63 with bitset counting", "kept"],
+    ["FESS", "O(1) per-move region counts from articulation data", "2× faster, +1", "kept"],
+    ["FESS", "Boxes frozen on goals as walls (distances, matching)", "+1, 40% faster", "kept"],
+    ["FESS", "Alternate cyclic visits with best-cell visits", "47 = 47", "rejected"],
+    ["FESS", "Free moves at nodes with ≤ 2 moves (Festival)", "−2", "rejected"],
+    ["FESS", "Prefer boxes farther from goals (Festival tie-break)", "−2", "rejected"],
+    ["FESS", "FIFO vs LIFO in-cell tie-break", "59 = 59", "rejected"],
+    ["FESS", "Greedy \"move boxes closer to goals\" advisor", "−6", "rejected"],
+    ["FESS", "Hand near-complete FESS positions to budgeted weighted A*", "−6 (20k nodes); 19/90 (100k)", "rejected"],
+    ["FESS", "Backward breadth-first endgame table probed by FESS", "−1, 2× slower: stalled positions were dead, not short", "rejected"],
+    ["Portfolio", "Weighted A* thread (w = 3 then 5)", "No unique Microban solves", "removed"],
+    ["Portfolio", "Backward (pull) A* replacing the second FESS thread", "SokHard +3, Microban +1", "kept"],
+    ["Portfolio", "Bidir expands the smaller frontier (Pohl)", "SokHard +6; then bidir itself removed", "removed"],
+    ["Portfolio", "Weighted backward (w = 3) replacing optimal backward", "Alone 70 vs 61, but portfolio 97 → 87", "rejected"],
+    ["Portfolio", "Weighted backward alongside optimal backward, replacing bidir", "Microban 486 → 488, Holland 59 → 61, SokHard 103/98 vs 99/100, others equal", "kept"],
+    ["Portfolio", "Bidir forward side with A*'s gate and frozen-wall rules", "Bidir alone 77 → 84, portfolio neutral", "rejected"],
+    ["Portfolio", "Size-adaptive second FESS on large levels", "Upper bound first: variants alone solve 1 / 0 / 0 of the 23 XSokoban misses", "rejected"],
+    ["Portfolio", "Bidirectional search (500 lines)", "No loss on any pack without it", "removed"],
+    ["Portfolio", "Only a verified solution stops the portfolio", "Safety", "kept"],
+    ["Portfolio", "Memory watchdog (process RSS, default half of RAM)", "No machine OOM at long limits; same results", "kept"],
+    ["Deadlocks", "Exact pair deadlock table", "A* nodes −16–20% on Microban, identical optimal pushes; SokHard 61 → 71", "kept"],
+    ["Deadlocks", "Backward (mirror-image) pair table", "71 → 77", "kept"],
+    ["Deadlocks", "Triple tables + gate forced pushes (A* only)", "77 → 86", "kept"],
+    ["Deadlocks", "Quadruple tables (≤ 50 squares)", "36% fewer nodes, 84 vs 85", "rejected"],
+    ["Deadlocks", "Partner-square filtering of dead-set checks", "89 → 98", "kept"],
+    ["Deadlocks", "Pair lower bound (exact two-box distances over disjoint pairs)", "14–28% fewer nodes but slower; A*-only 62 vs 69", "rejected"],
+    ["Deadlocks", "Naive tunnel macros (July)", "Unsound: Microban I #10 needs parking in a tunnel", "rejected"],
+    ["Deadlocks", "Learned deadlock patterns (prove dead, shrink to a core)", "Proofs cost 2–30 s each; impractical at 10 s", "rejected"],
+    ["Speed", "Bucket open list (identical order)", "Identical nodes; backward 10–15% faster, 4× smaller entries", "kept"],
+    ["Speed", "Transposed distance tables", "Identical nodes, slightly slower", "rejected"],
+    ["Speed", "Warm-start matching from the parent (backward)", "First 94 vs 97 (noise), dropped; retested with two backward threads: SokHard 101/103 → 116/115", "kept"],
+    ["Speed", "Warm-start matching in forward A*", "A* 5–20% faster; portfolio within noise, ~40 lines", "rejected"],
+    ["Speed", "Compact matching storage (v + assignment only)", "Identical nodes; lasts 46% longer before the memory limit", "kept"],
+    ["Codex ideas", "Seed backward dead-set tables only from the start player's region", "Fixed 400k-node budget: 47 → 48, identical optimal pushes", "kept"],
+    ["Codex ideas", "O(m) dual child bounds, exact matching at pop (backward)", "Backward alone +3 Microban; SokHard 117/116 vs 114/116", "kept"],
+    ["Codex ideas", "Backward \"freeze\" (erase pullable boxes to a fixed point)", "Fixed budget 48 → 49, but 27% slower per node, no Microban gains", "rejected"],
+    ["Codex ideas", "Generation-time duplicate rejection (backward)", "Identical time at fixed nodes; Microban backward −2; SokHard 117/117 vs 116/116", "rejected"],
+    ["Codex ideas", "Player-side-aware single-box distances", "Identical optimal pushes; faster on 3 of 4 Microban sets; SokHard A/B interrupted", "pending"],
+    ["Codex ideas", "FESS advisors for reopening goals / two-move preparation", "Speculative", "pending"]
+  ];
+  const statuses = ["all", "kept", "rejected", "removed", "pending"], areas = ["all", ...new Set(LEDGER.map(r => r[0]))];
+  let fStatus = "all", fArea = "all";
+  function chips(container, list, get, set) {
+    const c = document.getElementById(container);
+    for (const v of list) {
+      const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.textContent = v === "all" ? "All" : v[0].toUpperCase() + v.slice(1);
+      b.setAttribute("aria-pressed", v === get() ? "true" : "false");
+      b.addEventListener("click", () => { set(v); c.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === b ? "true" : "false")); drawLedger(); });
+      c.appendChild(b);
+    }
+  }
+  chips("statusFilters", statuses, () => fStatus, v => fStatus = v);
+  chips("areaFilters", areas, () => fArea, v => fArea = v);
+  function drawLedger() {
+    const body = document.getElementById("ledgerBody"); body.textContent = "";
+    const rows = LEDGER.filter(r => (fStatus === "all" || r[3] === fStatus) && (fArea === "all" || r[0] === fArea));
+    for (const [area, tech, res, status] of rows) {
+      const tr = document.createElement("tr");
+      const t1 = document.createElement("td"); t1.textContent = tech;
+      const small = document.createElement("div"); small.className = "count"; small.textContent = area; t1.appendChild(small);
+      const t2 = document.createElement("td"); t2.textContent = res;
+      const t3 = document.createElement("td"); const p = document.createElement("span"); p.className = "pill " + status; p.textContent = status; t3.appendChild(p);
+      tr.append(t1, t2, t3); body.appendChild(tr);
+    }
+    const kept = LEDGER.filter(r => r[3] === "kept").length;
+    document.getElementById("ledgerCount").textContent = `Showing ${rows.length} of ${LEDGER.length} techniques · ${kept} kept overall.`;
+  }
+  drawLedger();
+})();
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "neutral" });
+</script>
+</body>
+</html>
