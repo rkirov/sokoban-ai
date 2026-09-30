@@ -7,8 +7,8 @@ a stack of provably sound deadlock detectors. Every technique here was
 re-derived from first principles, measured on real levels, and kept only if
 it helped; several that did not are listed at the end.
 
-An illustrated account of how the solver was built, with every technique
-tried and links into the code: [Sokoban Solver Field Notes](https://rkirov.github.io/sokoban-ai/)
+An illustrated guide to how the solver works, with diagrams and links into
+the code: [Sokoban Solver Field Notes](https://rkirov.github.io/sokoban-ai/)
 (`docs/index.html`).
 
 ## Usage
