@@ -28,6 +28,8 @@ use std::time::Duration;
 enum Strategy {
     /// Forward push-optimal A*.
     Optimal,
+    /// Forward best-first with f = g + w*h, or f = h for w = 0 (greedy).
+    Forward(u32),
     /// Backward (pull) search from the goal with f = g + w*h (w = 1:
     /// optimal): cramped goal areas are easy backward.
     Backward(u32),
@@ -45,6 +47,9 @@ impl Strategy {
             "backward" => Strategy::Backward(1),
             _ if name.starts_with("backward:") => Strategy::Backward(name["backward:".len()..].parse().ok()?),
             "fess" => Strategy::Fess,
+            "greedy" => Strategy::Forward(0),
+            _ if name.starts_with("forward:") => Strategy::Forward(name["forward:".len()..].parse().ok()?),
+            "backward-greedy" => Strategy::Backward(0),
             _ => return None,
         })
     }
@@ -52,6 +57,9 @@ impl Strategy {
     fn name(&self) -> &'static str {
         match self {
             Strategy::Optimal => "fwd-optimal",
+            Strategy::Forward(0) => "fwd-greedy",
+            Strategy::Forward(_) => "fwd-weighted",
+            Strategy::Backward(0) => "backward-greedy",
             Strategy::Backward(1) => "backward",
             Strategy::Backward(_) => "backward-weighted",
             Strategy::Fess => "fess",
@@ -61,8 +69,12 @@ impl Strategy {
     fn run(&self, board: &Board, opts: &Options) -> Outcome {
         match self {
             Strategy::Optimal => solver::solve(board, &Options { mode: Mode::OptimalPushes, ..opts.clone() }),
+            Strategy::Forward(w) => {
+                let mode = if *w == 0 { Mode::Greedy } else { Mode::Weighted(*w) };
+                solver::solve(board, &Options { mode, ..opts.clone() })
+            }
             Strategy::Backward(w) => {
-                let mode = if *w <= 1 { Mode::OptimalPushes } else { Mode::Weighted(*w) };
+                let mode = match w { 0 => Mode::Greedy, 1 => Mode::OptimalPushes, _ => Mode::Weighted(*w) };
                 solver::solve_backward(board, &Options { mode, ..opts.clone() })
             }
             Strategy::Fess => fess::solve(board, opts),
