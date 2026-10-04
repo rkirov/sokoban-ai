@@ -589,7 +589,9 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
         // Matcher::row_lower_bound); the exact matching is computed here, by
         // warm start from the parent. If it raises the key, re-queue instead
         // of expanding — nothing is stored yet, so this is cheap to undo.
-        if tt.get(&(sorted.clone(), norm)).is_some_and(|&seen| seen <= g) {
+        // A greedy search ignores g, so a position is expanded only once.
+        let greedy = matches!(opts.mode, Mode::Greedy);
+        if tt.get(&(sorted.clone(), norm)).is_some_and(|&seen| greedy || seen <= g) {
             stats.duplicates += 1;
             continue;
         }
