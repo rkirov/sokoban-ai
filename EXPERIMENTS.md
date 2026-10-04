@@ -125,6 +125,13 @@ Same-machine reference: YASS 2.153 solves 117 SokHard levels at 10 s
 
 ## Calibration facts
 
+- October 2026, after greedy backward search and the faster triple check:
+  all 17 SokHard levels missed at 10 s are solved within 40 s (slowest
+  37.5 s, 14 of them by greedy backward search), so SokHard is purely
+  time-bound. Sasquatch and Holland are not: of their 10 s misses, 0/18
+  and 1/19 are solved with a 60 s limit, every other run stopping at the
+  2.5 GB memory cap after 16–41 s.
+
 - A 60 s run solves 66 of the 74 SokHard levels failed at 10 s (median
   24.5 s); 48 of those 66 are solved by the backward thread.
 - A\* profile on failing SokHard levels: no dominant cost (~40k
