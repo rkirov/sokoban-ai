@@ -120,16 +120,16 @@ Per-level time limit 10 s, 4-core machine, full default portfolio.
 | XSokoban | 90 | **67** | — | 88 / 85 |
 | SokEvo | 107 | **107** | — | 107 / 107 |
 | Grigr2001 | 100 | **93** | — | 96 / 96 |
-| Holland | 81 | **61** | — | 65 / 68 |
+| Holland | 81 | **61–62** | — | 65 / 68 |
 | Sasquatch | 50 | **32** | — | 41 / 43 |
-| SokHard | 163 | **146–147** | 117 | 134 / 163 |
+| SokHard | 163 | **153–157** | 117 | 134 / 163 |
 
 \* From the sokobano.de solver statistics (Large Test Suite), measured on a
 Ryzen 9 7900X with 8+ threads — not directly comparable. YASS was built from
 source and run single-threaded on the same 4-core machine as this solver.
 
 Progress since September 2026 (same machine, 10 s): XSokoban 16 → 67,
-Microban 480 → 488, SokHard 61 → 146–147 (runs vary by a few levels on
+Microban 480 → 488, SokHard 61 → 153–157 (runs vary by a few levels on
 this shared machine), Sasquatch 26 → 32. On SokHard this is ahead of YASS
 (117 on the same machine), Festival (134) and Takaken (139) as published
 on a faster machine; only Sokolution (163) solves more.

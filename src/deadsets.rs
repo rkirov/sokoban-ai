@@ -38,6 +38,12 @@ pub struct DeadSets {
     /// so the runtime check first filters the other boxes down to those
     /// (usually none) — measured as the largest per-child cost otherwise.
     partners: Vec<Vec<u64>>,
+    /// Triples only: third[a * n + b] = bitset of squares c such that
+    /// {a, b, c} is dead for some player region. A moved box's check then
+    /// ANDs this with the box occupancy instead of looking up every pair of
+    /// partner boxes (in backward tables nearly every pair of squares is
+    /// partnered, and those lookups were ~45% of the backward search).
+    third: Vec<[u64; 2]>,
 }
 
 /// Which search the table serves.
@@ -76,6 +82,7 @@ impl DeadSets {
             dead: vec![0; n.pow(k as u32)],
             labels: FxHashMap::default(),
             partners: Vec::new(),
+            third: Vec::new(),
         };
 
         // Region count (and labels, when > 1) of the floor minus each set.
@@ -179,6 +186,8 @@ impl DeadSets {
 
         let words = n.div_ceil(64);
         let mut partners = vec![vec![0u64; words]; n];
+        // max_squares(3) <= 128, so two words always hold a triple's bitset.
+        let mut third = if k == 3 { vec![[0u64; 2]; n * n] } else { Vec::new() };
         for_each_set(&live, k, &mut |set| {
             let code = db.code(set);
             let zones = zone_count[code].min(8);
@@ -192,9 +201,17 @@ impl DeadSets {
                         }
                     }
                 }
+                if k == 3 {
+                    for (a, b, c) in [(0, 1, 2), (0, 2, 1), (1, 2, 0)] {
+                        let (sa, sb, sc) = (set[a] as usize, set[b] as usize, set[c] as usize);
+                        third[sa * n + sb][sc / 64] |= 1 << (sc % 64);
+                        third[sb * n + sa][sc / 64] |= 1 << (sc % 64);
+                    }
+                }
             }
         });
         db.partners = partners;
+        db.third = third;
         Some(db)
     }
 
@@ -243,10 +260,28 @@ impl DeadSets {
             }
         }
         let cand = &cand[..m];
-        match self.k {
-            2 => cand.iter().any(|&b| self.is_dead(&[to, b], player)),
-            _ => (0..m).any(|i| cand[i + 1..].iter().any(|&c| self.is_dead(&[to, cand[i], c], player))),
+        if self.k == 2 {
+            return cand.iter().any(|&b| self.is_dead(&[to, b], player));
         }
+        let mut occupied = [0u64; 2];
+        for &b in cand {
+            occupied[b as usize / 64] |= 1 << (b % 64);
+        }
+        cand.iter().any(|&b| {
+            let t = &self.third[to as usize * self.n + b as usize];
+            (0..2).any(|w| {
+                let mut bits = t[w] & occupied[w];
+                while bits != 0 {
+                    let c = (w * 64 + bits.trailing_zeros() as usize) as u16;
+                    // Each pair {b, c} once.
+                    if c > b && self.is_dead(&[to, b, c], player) {
+                        return true;
+                    }
+                    bits &= bits - 1;
+                }
+                false
+            })
+        })
     }
 
     /// Unfiltered check (fallback when the moved box has many partner boxes).
