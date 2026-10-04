@@ -37,7 +37,7 @@ against the original level text before it is reported.
 Four threads race with the full time budget each; the first *solution*
 stops the others. Default: push-optimal A\* (reported solutions are optimal
 whenever it finishes first), FESS, and backward (pull) search twice —
-optimal and weighted (w = 3) — because the two orderings solve different
+optimal and greedy (f = h) — because the two orderings solve different
 cramped levels. The portfolio was chosen by measuring each strategy's
 *unique* solves and then head-to-head on every pack (bidirectional search
 and staged weighted forward A\* were removed: they added no solves).
@@ -108,7 +108,7 @@ that plan instead.
 
 `solver.rs`: A\* over pushes with the min-cost matching lower bound
 (incremental Hungarian, `matching.rs`), and the backward (pull) search,
-optimal or weighted.
+optimal, weighted or greedy.
 
 ## Benchmarks
 
@@ -116,21 +116,22 @@ Per-level time limit 10 s, 4-core machine, full default portfolio.
 
 | Set | Levels | This solver | Same machine: YASS 2.153 | Published @10 s: Festival / Sokolution* |
 |-----|--------|-------------|--------------------------|------------------------------------------|
-| Microban I–IV | 493 | **488** | 477 | — |
+| Microban I–IV | 493 | **486** | 477 | — |
 | XSokoban | 90 | **67** | — | 88 / 85 |
 | SokEvo | 107 | **107** | — | 107 / 107 |
 | Grigr2001 | 100 | **93** | — | 96 / 96 |
 | Holland | 81 | **61** | — | 65 / 68 |
-| Sasquatch | 50 | **29** | — | 41 / 43 |
-| SokHard | 163 | **115–116** | 117 | 134 / 163 |
+| Sasquatch | 50 | **32** | — | 41 / 43 |
+| SokHard | 163 | **126–127** | 117 | 134 / 163 |
 
 \* From the sokobano.de solver statistics (Large Test Suite), measured on a
 Ryzen 9 7900X with 8+ threads — not directly comparable. YASS was built from
 source and run single-threaded on the same 4-core machine as this solver.
 
-Progress in the September 2026 session (same machine, 10 s): XSokoban
-16 → 67, Microban 480 → 488, SokHard 61 → 115–116 (runs vary by a few
-levels on this shared machine) — level with YASS's 117.
+Progress since September 2026 (same machine, 10 s): XSokoban 16 → 67,
+Microban 480 → 486, SokHard 61 → 126–127 (runs vary by a few levels on
+this shared machine), Sasquatch 26 → 32. On SokHard this is ahead of YASS
+on the same machine (117) and of its published 125 on a faster one.
 
 ## Open problems and next steps
 
