@@ -183,12 +183,12 @@ pre.mermaid { background: var(--surface); border: 1px solid var(--rule); border-
 <header class="hero">
   <div class="eyebrow">sokoban-ai · how the solver works</div>
   <h1>Sokoban Solver Field Notes</h1>
-  <p class="lede">A reference for the Rust solver in <a href="https://github.com/rkirov/sokoban-ai">rkirov/sokoban-ai</a>: what each part does, why it is there, how it stays correct, and where it lives in the code. At 10 seconds per level it solves 486 of 493 Microban levels and 126–127 of 163 SokHard levels, ahead of YASS on the same machine.</p>
+  <p class="lede">A reference for the Rust solver in <a href="https://github.com/rkirov/sokoban-ai">rkirov/sokoban-ai</a>: what each part does, why it is there, how it stays correct, and where it lives in the code. At 10 seconds per level it solves 488 of 493 Microban levels and 146–147 of 163 SokHard levels, more than YASS, Festival and Takaken report on that pack.</p>
   <div class="meta">
     <span>~5,700 lines of Rust in <code>src/</code></span>
     <span>36 tests</span>
     <span>One dependency (<code>rustc-hash</code>)</span>
-    <span>Code pointers link to commit <code>47ff3ac</code></span>
+    <span>Code pointers link to commit <code>e29453c</code></span>
   </div>
 </header>
 
@@ -428,7 +428,7 @@ flowchart LR
 <h3 id="backward">Backward search</h3>
 <div class="prose">
 <p>The backward search starts from the solved position (one root per player region of the goal-filled board) and <em>pulls</em> boxes until they sit on the start squares with the player connected to the start. Its bound is the matching over <code>start_dist</code>, and its pruning uses the backward dead squares and the mirror dead-set tables. It returns forward pushes by reversing the path.</p>
-<p>The portfolio runs it twice: optimal (<code>f = g + h</code>) and greedy (<code>f = h</code>). The two orderings solve different levels: greedy dives straight for the start position and solves many crowded levels the optimal search cannot finish, while the optimal search covers levels where greedy gets lost.</p>
+<p>The portfolio runs it twice: optimal (<code>f = g + h</code>) and greedy (<code>f = h</code>). The two orderings solve different levels: greedy dives straight for the start position and solves many crowded levels the optimal search cannot finish, while the optimal search covers levels where greedy gets lost. The greedy search expands each position once: its ordering ignores the push count, so re-expanding a position reached again by a shorter path would only repeat work. That one rule took SokHard from about 123 to 146.</p>
 <div class="pointers"><span class="where">src/solver.rs:442 solve_backward</span></div>
 </div>
 <ol class="flow">
@@ -592,7 +592,7 @@ flowchart LR
   const DIRS = [[0,-1],[0,1],[-1,0],[1,0]]; // U D L R, as level.rs
 
   // Code pointers (file.rs:line) link to the exact commit on GitHub.
-  const SHA = "47ff3ac26dacb9bcc404bb496b75ae1137a53c13";
+  const SHA = "e29453c1402ea33d4012a40a2ad07c3ca7166bc7";
   const REPO = "https://github.com/rkirov/sokoban-ai/blob/" + SHA + "/";
   document.querySelectorAll(".where, td code, pre.code .c").forEach(node => {
     const m = node.textContent.match(/(?:src\/)?([a-z_]+\.rs):(\d+)/);
@@ -783,13 +783,13 @@ flowchart LR
 
   // Results table.
   const SCORE = [
-    ["Microban I–IV", 493, 486, "486", 477, null, null],
+    ["Microban I–IV", 493, 488, "488", 477, null, null],
     ["XSokoban", 90, 67, "67", null, 88, 85],
     ["SokEvo", 107, 107, "107", null, 107, 107],
     ["Grigr2001", 100, 93, "93", null, 96, 96],
     ["Holland", 81, 61, "61", null, 65, 68],
     ["Sasquatch", 50, 32, "32", null, 41, 43],
-    ["SokHard", 163, 127, "126–127", 117, 134, 163]
+    ["SokHard", 163, 147, "146–147", 117, 134, 163]
   ];
   const st2 = document.getElementById("score");
   st2.innerHTML = "<thead><tr><th>Pack</th><th class='num'>Levels</th><th class='num'>This solver</th><th class='num'>YASS</th><th class='num'>Festival / Sokolution</th><th>Solved fraction</th></tr></thead>";
