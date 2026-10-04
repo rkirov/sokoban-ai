@@ -183,12 +183,12 @@ pre.mermaid { background: var(--surface); border: 1px solid var(--rule); border-
 <header class="hero">
   <div class="eyebrow">sokoban-ai · how the solver works</div>
   <h1>Sokoban Solver Field Notes</h1>
-  <p class="lede">A reference for the Rust solver in <a href="https://github.com/rkirov/sokoban-ai">rkirov/sokoban-ai</a>: what each part does, why it is there, how it stays correct, and where it lives in the code. At 10 seconds per level it solves 488 of 493 Microban levels and 146–147 of 163 SokHard levels, more than YASS, Festival and Takaken report on that pack.</p>
+  <p class="lede">A reference for the Rust solver in <a href="https://github.com/rkirov/sokoban-ai">rkirov/sokoban-ai</a>: what each part does, why it is there, how it stays correct, and where it lives in the code. At 10 seconds per level it solves 488 of 493 Microban levels and 153–157 of 163 SokHard levels, more than YASS, Festival and Takaken report on that pack. Given 40 seconds it solves all of SokHard.</p>
   <div class="meta">
     <span>~5,700 lines of Rust in <code>src/</code></span>
     <span>36 tests</span>
     <span>One dependency (<code>rustc-hash</code>)</span>
-    <span>Code pointers link to commit <code>e29453c</code></span>
+    <span>Code pointers link to commit <code>2b4e72d</code></span>
   </div>
 </header>
 
@@ -373,7 +373,7 @@ flowchart LR
 <tr><td>Matching</td><td>The boxes cannot all reach distinct goals</td><td>All</td><td><code>matching.rs:72</code></td></tr>
 <tr><td>Freeze</td><td>A box off a goal can never move again</td><td>A*, FESS</td><td><code>deadlock.rs:64</code></td></tr>
 <tr><td>Frozen walls</td><td>Boxes frozen on goals seal the route to a goal someone needs</td><td>A*, FESS</td><td><code>deadlock.rs:147</code></td></tr>
-<tr><td>Dead sets (k = 2, 3)</td><td>These k boxes alone, with the player in this region, cannot be finished</td><td>All (backward uses the mirror table)</td><td><code>deadsets.rs:63</code></td></tr>
+<tr><td>Dead sets (k = 2, 3)</td><td>These k boxes alone, with the player in this region, cannot be finished</td><td>All (backward uses the mirror table)</td><td><code>deadsets.rs:69</code></td></tr>
 <tr><td>PI-corrals</td><td>Only the pushes into a fenced area need to be tried now</td><td>A*, FESS</td><td><code>corral.rs:96</code></td></tr>
 <tr><td>Corral mini-search</td><td>A fenced area can never be resolved</td><td>A*, FESS</td><td><code>corral.rs:315</code></td></tr>
 </tbody>
@@ -388,14 +388,14 @@ flowchart LR
 <h3>Exact dead-set tables</h3>
 <p>Take any k boxes alone on the board with the player in some region. If even they cannot all reach goals, the full position is dead too, because removing boxes only makes a position easier. Which (box set, player region) states <em>can</em> be finished is computed once per level, by breadth-first pulls from every state with all k boxes on goals. Every state not reached is a deadlock. Pairs are built for levels up to 400 squares and triples up to 120.</p>
 <p>The mirror table serves the backward searches. It is seeded from the start squares with the player in the start player's region, and expanded by pushes. A box set it never reaches could not have come from the start position.</p>
-<p>Checking a child costs one lookup per combination with the moved box, which used to be the largest per-child cost. Each square therefore keeps a bitset of <em>partner</em> squares, the squares it appears with in some dead set. A moved box can only complete a dead set with its partners, usually none, so most checks exit immediately.</p>
-<div class="pointers"><span class="where">src/deadsets.rs:63 compute</span><span class="where">src/deadsets.rs:232 moved_box_dead</span><span class="where">src/deadsets.rs:355</span><span class="where">src/deadsets.rs:405</span></div>
+<p>Checking a child costs one lookup per combination with the moved box, which used to be the largest per-child cost. Each square therefore keeps a bitset of <em>partner</em> squares, the squares it appears with in some dead set. A moved box can only complete a dead set with its partners, so most forward checks exit immediately. Backward tables are much denser: nearly every pair of squares is partnered. For triples, each ordered pair of squares therefore also keeps a bitset of the third squares that complete a dead triple. The check ANDs that with the occupied partner squares and looks up only the hits. This made the backward search 1.4–1.8× faster with identical results.</p>
+<div class="pointers"><span class="where">src/deadsets.rs:69 compute</span><span class="where">src/deadsets.rs:249 moved_box_dead</span><span class="where">src/deadsets.rs:390</span><span class="where">src/deadsets.rs:440</span></div>
 </div>
 <div class="boards">
   <figure style="margin:0"><div class="board-title">Dead pair</div><div class="board-wrap"><div class="board" id="pairDead"></div></div></figure>
   <figure style="margin:0"><div class="board-title">Not dead: two lanes</div><div class="board-wrap"><div class="board" id="pairAlive"></div></div></figure>
 </div>
-<p class="count" style="margin-top:10px; max-width:70ch">From <span class="where">src/deadsets.rs:308</span>. In a one-wide corridor the rear box cannot move until the front one does, and the player can never reach the front box's far side. Neither box is frozen and the matching is feasible, so only the pair table catches it.</p>
+<p class="count" style="margin-top:10px; max-width:70ch">From <span class="where">src/deadsets.rs:343</span>. In a one-wide corridor the rear box cannot move until the front one does, and the player can never reach the front box's far side. Neither box is frozen and the matching is feasible, so only the pair table catches it.</p>
 
 <div class="prose">
 <h3>PI-corrals</h3>
@@ -507,8 +507,8 @@ flowchart LR
 <table>
 <thead><tr><th>Invariant</th><th>How it is checked</th><th>Test</th></tr></thead>
 <tbody>
-<tr><td>Dead-set tables are exact</td><td>Agreement with exhaustive solving of every small sub-position</td><td><code>deadsets.rs:355</code></td></tr>
-<tr><td>No real solution position is ever marked dead</td><td>Replay solutions; every position must be alive, forward and backward</td><td><code>deadsets.rs:405</code></td></tr>
+<tr><td>Dead-set tables are exact</td><td>Agreement with exhaustive solving of every small sub-position</td><td><code>deadsets.rs:390</code></td></tr>
+<tr><td>No real solution position is ever marked dead</td><td>Replay solutions; every position must be alive, forward and backward</td><td><code>deadsets.rs:440</code></td></tr>
 <tr><td>Macro moves equal all one-box push sequences</td><td>Brute-force comparison and replay</td><td><code>macros.rs:489</code></td></tr>
 <tr><td>O(1) region counts are right</td><td>Brute-force region counting</td><td><code>macros.rs:582</code></td></tr>
 <tr><td>One-row matching re-solve equals a full solve</td><td>Pseudo-random matrices, square and rectangular, every row perturbed</td><td><code>matching.rs:284</code></td></tr>
@@ -546,8 +546,8 @@ flowchart LR
 </div>
 <figure class="chart" id="chartCal"></figure>
 <div class="twocol">
-  <div class="card"><h4>Large levels</h4><p>XSokoban (67/90) and Holland (61/81) are not limited by time. On XSokoban misses, FESS's best positions are provably dead: all but 2–4 boxes are packed in a way that cannot be completed. The fix is recognizing those dead ends early. Learned deadlock patterns would do it, but each proof currently takes 2–30 s.</p></div>
-  <div class="card"><h4>Dense levels</h4><p>SokHard is limited by time, mostly in the backward threads, so backward-search speed still pays. Sasquatch runs into the memory cap after 25–50 s.</p></div>
+  <div class="card"><h4>Large levels</h4><p>XSokoban (67/90) and Holland (61–62/81) are not limited by time. On most XSokoban misses FESS reaches a near-complete position that is already dead, and the fatal move happened many moves earlier, for example a box plugging the only door to the goal room. The rest stall early because the plan gives no sense of progress (diagonal goal rooms, parking plans). Festival-style learned deadlock patterns were built and measured, but their proofs did not succeed within a useful budget here.</p></div>
+  <div class="card"><h4>Dense levels</h4><p>SokHard is limited only by time: every level is solved within 40 s, almost all by the greedy backward thread, so its speed converts directly into solves. Sasquatch runs into the memory cap after 25–50 s.</p></div>
   <div class="card"><h4>Reinforcement learning</h4><p>Only after the classical techniques are exhausted, and only as an advisor inside FESS, never as something that prunes.</p></div>
 </div>
 
@@ -592,7 +592,7 @@ flowchart LR
   const DIRS = [[0,-1],[0,1],[-1,0],[1,0]]; // U D L R, as level.rs
 
   // Code pointers (file.rs:line) link to the exact commit on GitHub.
-  const SHA = "e29453c1402ea33d4012a40a2ad07c3ca7166bc7";
+  const SHA = "2b4e72d0107a5610bb503a7cd3d305544d723b2b";
   const REPO = "https://github.com/rkirov/sokoban-ai/blob/" + SHA + "/";
   document.querySelectorAll(".where, td code, pre.code .c").forEach(node => {
     const m = node.textContent.match(/(?:src\/)?([a-z_]+\.rs):(\d+)/);
@@ -787,9 +787,9 @@ flowchart LR
     ["XSokoban", 90, 67, "67", null, 88, 85],
     ["SokEvo", 107, 107, "107", null, 107, 107],
     ["Grigr2001", 100, 93, "93", null, 96, 96],
-    ["Holland", 81, 61, "61", null, 65, 68],
+    ["Holland", 81, 62, "61–62", null, 65, 68],
     ["Sasquatch", 50, 32, "32", null, 41, 43],
-    ["SokHard", 163, 147, "146–147", 117, 134, 163]
+    ["SokHard", 163, 157, "153–157", 117, 134, 163]
   ];
   const st2 = document.getElementById("score");
   st2.innerHTML = "<thead><tr><th>Pack</th><th class='num'>Levels</th><th class='num'>This solver</th><th class='num'>YASS</th><th class='num'>Festival / Sokolution</th><th>Solved fraction</th></tr></thead>";
@@ -855,11 +855,14 @@ flowchart LR
     ["Deadlocks", "Quadruple dead-set tables (≤ 50 squares)", "36% fewer nodes, no more levels solved"],
     ["Deadlocks", "Pair lower bound (exact two-box distances over disjoint pairs)", "14–28% fewer nodes but slower overall"],
     ["Deadlocks", "Tunnel macros forcing boxes through corridors", "Unsound (Microban 1 #10); gate pushes are used instead"],
-    ["Deadlocks", "Learned deadlock patterns (prove dead, shrink to a core)", "Proofs take 2–30 s each, too slow at 10 s"],
     ["Deadlocks", "Backward \"freeze\" (erase pullable boxes to a fixed point)", "Sound, +1 at a fixed node budget, but 27% slower per node"],
     ["Speed", "Transposed distance tables", "Identical nodes, slightly slower"],
     ["Speed", "Warm-started matching in forward A*", "A* 5–20% faster, portfolio within noise, ~40 extra lines"],
-    ["Speed", "Rejecting backward duplicates when generated, not when popped", "Same time per node: the extra floods cost what the saved pops did"]
+    ["Speed", "Rejecting backward duplicates when generated, not when popped", "Same time per node: the extra floods cost what the saved pops did"],
+    ["Speed", "Transposed start-distance table for the backward search", "Identical nodes, no faster: the row scans were not the bottleneck"],
+    ["Deadlocks", "Crystalline goals (goal boxes that can never be released) as walls", "Sound, but no level gained where it applies (A*, FESS)"],
+    ["Deadlocks", "Player-aware single-box and frozen-wall distances", "Tighter bounds, identical optimal solutions, no more levels solved"],
+    ["Deadlocks", "Learned deadlock patterns (Festival-style shrink, prove, minimise)", "Proofs either came out alive after shrinking or ran out of budget; no levels gained"]
   ];
   const areas = ["all", ...new Set(LEFT_OUT.map(r => r[0]))];
   let fArea = "all";
