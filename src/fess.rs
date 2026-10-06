@@ -159,7 +159,6 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
     let mut arena: Vec<Node> = Vec::new();
     let mut expanded: FxHashMap<(Box<[u16]>, u16), ()> = FxHashMap::default();
     let mut cells: FxHashMap<Cell, CellQueue> = FxHashMap::default();
-    let fair = std::env::var_os("FESS_UNFAIR").is_none();
     let mut next_line = NEW_LINE;
     let mut rotation: Vec<Cell> = Vec::new();
     let mut cursor = 0usize;
@@ -382,9 +381,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                 let move_weight = if Some(mi) == packer || Some(mi) == merger || Some(mi) == unblocker { 0 } else { 1 };
                 seq += 1;
                 // A move that raises the packed count starts a new line.
-                let line = if !fair {
-                    0
-                } else if packed > own.0 {
+                let line = if packed > own.0 {
                     next_line += 1;
                     next_line
                 } else {

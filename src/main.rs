@@ -19,12 +19,11 @@ use std::time::Duration;
 
 /// One thread of the racing portfolio. The default portfolio was chosen by
 /// measuring each strategy's unique solves at 10 s/level: optimal A* (also
-/// gives push-optimal answers), FESS (large levels), and backward search
-/// twice — optimal and greedy (f = h) — since cramped goal areas are easy
-/// backward and the two orderings solve different levels (greedy replaced
-/// weighted w = 3: SokHard +9, Sasquatch +3, Microban -2). (Bidirectional
-/// search and staged weighted forward A* were measured and removed: they
-/// added no solves; see EXPERIMENTS.md.)
+/// gives push-optimal answers), FESS (large levels), and greedy backward
+/// search (f = h) twice — over single pulls and over macro pulls — since
+/// cramped goal areas are easy backward and the two move shapes solve
+/// different levels (see EXPERIMENTS.md for the measurements behind each
+/// choice, and for bidirectional and weighted searches that were removed).
 #[derive(Clone, Copy)]
 enum Strategy {
     /// Forward push-optimal A*.
@@ -40,7 +39,7 @@ enum Strategy {
 
 impl Strategy {
     const DEFAULT: [Strategy; 4] =
-        [Strategy::Optimal, Strategy::Fess, Strategy::Backward(1), Strategy::Backward(0)];
+        [Strategy::Optimal, Strategy::Fess, Strategy::Backward(0), Strategy::BackwardMacro];
 
     fn parse(name: &str) -> Option<Self> {
         Some(match name {
@@ -234,7 +233,7 @@ fn main() {
     if args.is_empty() {
         eprintln!(
             "usage: sokoban-solver <levels.txt> [--level N] [--time-limit SECS]\n\
-             \x20 [--portfolio optimal,backward,backward:W,backward-greedy,fess]   (default: optimal,fess,backward,backward-greedy)\n\
+             \x20 [--portfolio optimal,backward,backward:W,backward-greedy,backward-macro,fess]   (default: optimal,fess,backward-greedy,backward-macro)\n\
              \x20 [--mode auto|optimal|greedy|weighted:W|backward|fess]\n\
              \x20 [--memory-limit GB]   (default: half of RAM)  [--max-nodes N] [--no-corral]\n\
              \x20 [--solutions FILE] [--quiet] [--show-plan]"

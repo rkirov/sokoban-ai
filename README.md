@@ -36,9 +36,9 @@ against the original level text before it is reported.
 
 Four threads race with the full time budget each; the first *solution*
 stops the others. Default: push-optimal A\* (reported solutions are optimal
-whenever it finishes first), FESS, and backward (pull) search twice —
-optimal and greedy (f = h) — because the two orderings solve different
-cramped levels. The portfolio was chosen by measuring each strategy's
+whenever it finishes first), FESS, and greedy backward (pull) search
+twice — over single pulls and over macro pulls (one box pulled any
+distance) — because the two move shapes solve different levels. The portfolio was chosen by measuring each strategy's
 *unique* solves and then head-to-head on every pack (bidirectional search
 and staged weighted forward A\* were removed: they added no solves).
 
@@ -57,7 +57,10 @@ regions) — and cycles over occupied cells, expanding one move per cell per
 visit, so progress in any feature earns its own share of effort. Within a
 cell, moves are taken by accumulated weight: advisor moves (the best move
 that packs a box, merges free regions, or reduces the number of boxes
-standing in other boxes' way) cost 0, others 1.
+standing in other boxes' way) cost 0, others 1. Moves in a cell are grouped by
+line of play (the ancestor that first reached their packed count) and the
+lines are served round-robin, so a line that reaches a cell late is not
+starved by the descendants of an earlier one.
 
 Moves are **macro moves**: one box pushed any number of times while the
 player walks freely. Per box, a breadth-first search over (box square,
@@ -116,21 +119,21 @@ Per-level time limit 10 s, 4-core machine, full default portfolio.
 
 | Set | Levels | This solver | Same machine: YASS 2.153 | Published @10 s: Festival / Sokolution* |
 |-----|--------|-------------|--------------------------|------------------------------------------|
-| Microban I–IV | 493 | **488** | 477 | — |
-| XSokoban | 90 | **67** | — | 88 / 85 |
+| Microban I–IV | 493 | **489** | 477 | — |
+| XSokoban | 90 | **68** | — | 88 / 85 |
 | SokEvo | 107 | **107** | — | 107 / 107 |
 | Grigr2001 | 100 | **93** | — | 96 / 96 |
-| Holland | 81 | **61–62** | — | 65 / 68 |
-| Sasquatch | 50 | **32** | — | 41 / 43 |
-| SokHard | 163 | **153–157** | 117 | 134 / 163 |
+| Holland | 81 | **62** | — | 65 / 68 |
+| Sasquatch | 50 | **33** | — | 41 / 43 |
+| SokHard | 163 | **155** | 117 | 134 / 163 |
 
 \* From the sokobano.de solver statistics (Large Test Suite), measured on a
 Ryzen 9 7900X with 8+ threads — not directly comparable. YASS was built from
 source and run single-threaded on the same 4-core machine as this solver.
 
-Progress since September 2026 (same machine, 10 s): XSokoban 16 → 67,
-Microban 480 → 488, SokHard 61 → 153–157 (runs vary by a few levels on
-this shared machine), Sasquatch 26 → 32. On SokHard this is ahead of YASS
+Progress since September 2026 (same machine, 10 s): XSokoban 16 → 68,
+Microban 480 → 489, SokHard 61 → 155 (runs vary by a few levels on this
+shared machine), Sasquatch 26 → 33, Holland 57 → 62. On SokHard this is ahead of YASS
 (117 on the same machine), Festival (134) and Takaken (139) as published
 on a faster machine; only Sokolution (163) solves more.
 
