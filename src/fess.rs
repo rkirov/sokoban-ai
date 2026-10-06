@@ -64,6 +64,9 @@ struct Node {
     to: u16,
     weight: u32,
     cell: Cell,
+    /// Line of play: the ancestor that first reached this node's packed
+    /// count (see CellQueue).
+    pioneer: u32,
 }
 
 const NO_PARENT: u32 = u32::MAX;
@@ -83,6 +86,59 @@ struct Pending {
     box_idx: u16,
     to: u16,
     player: u16,
+    /// Line this move is queued under: the parent's pioneer, or a fresh id
+    /// (>= NEW_LINE) when the move raises the packed count.
+    line: u32,
+}
+
+/// Fresh line ids start here (node indices stay below).
+const NEW_LINE: u32 = 1 << 31;
+
+/// One cell's pending moves, grouped by line of play and served
+/// round-robin by how often each line has been served. Why: once one line
+/// reaches a cell, its descendants fill that cell with advisor-approved
+/// (weight 0) moves; a different line arriving later — often the one that
+/// did not plug a door on the way — would wait behind all of them. Fair
+/// service gives every line its share at once. Only the order of work
+/// changes, so completeness is unaffected.
+#[derive(Default)]
+struct CellQueue {
+    lines: FxHashMap<u32, BinaryHeap<Reverse<Pending>>>,
+    /// (times served, line), least served first.
+    order: BinaryHeap<Reverse<(u64, u32)>>,
+    /// Service count of the last line served: new lines start level with it.
+    floor: u64,
+}
+
+impl CellQueue {
+    fn push(&mut self, e: Pending) {
+        let line = e.line;
+        match self.lines.entry(line) {
+            std::collections::hash_map::Entry::Occupied(mut h) => h.get_mut().push(Reverse(e)),
+            std::collections::hash_map::Entry::Vacant(v) => {
+                v.insert(BinaryHeap::from(vec![Reverse(e)]));
+                self.order.push(Reverse((self.floor, line)));
+            }
+        }
+    }
+
+    fn pop(&mut self) -> Option<Pending> {
+        while let Some(Reverse((served, line))) = self.order.pop() {
+            let Some(h) = self.lines.get_mut(&line) else { continue };
+            let Some(Reverse(e)) = h.pop() else {
+                self.lines.remove(&line);
+                continue;
+            };
+            if h.is_empty() {
+                self.lines.remove(&line);
+            } else {
+                self.order.push(Reverse((served + 1, line)));
+            }
+            self.floor = served;
+            return Some(e);
+        }
+        None
+    }
 }
 
 /// Per-thread cap on queued moves (~40 bytes each), so long runs degrade to
@@ -102,7 +158,9 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
 
     let mut arena: Vec<Node> = Vec::new();
     let mut expanded: FxHashMap<(Box<[u16]>, u16), ()> = FxHashMap::default();
-    let mut cells: FxHashMap<Cell, BinaryHeap<Reverse<Pending>>> = FxHashMap::default();
+    let mut cells: FxHashMap<Cell, CellQueue> = FxHashMap::default();
+    let fair = std::env::var_os("FESS_UNFAIR").is_none();
+    let mut next_line = NEW_LINE;
     let mut rotation: Vec<Cell> = Vec::new();
     let mut cursor = 0usize;
     let mut pending = 0usize;
@@ -139,6 +197,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
         box_idx: 0,
         to: 0,
         player: board.start_player,
+        line: NEW_LINE,
     });
 
     loop {
@@ -204,6 +263,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                     to: entry.to,
                     weight,
                     cell: (0, 0),
+                    pioneer: 0,
                 });
                 stats.time = start_time.elapsed();
                 let pushes = reconstruct(board, &arena, node_idx, &mut macro_gen);
@@ -265,7 +325,8 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                 best_cell = cell;
             }
             let node_idx = arena.len() as u32;
-            arena.push(Node { boxes, player, parent: entry.parent, box_idx: entry.box_idx, to: entry.to, weight, cell });
+            let pioneer = if entry.line >= NEW_LINE { node_idx } else { entry.line };
+            arena.push(Node { boxes, player, parent: entry.parent, box_idx: entry.box_idx, to: entry.to, weight, cell, pioneer });
             stats.expanded += 1;
             let node = &arena[node_idx as usize];
 
@@ -314,13 +375,22 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
             let heap = cells.entry(cell).or_insert_with(|| {
                 rotation.push(cell);
                 cursor = rotation.len() - 1; // a new cell is served next
-                BinaryHeap::new()
+                CellQueue::default()
             });
             for &((packed, child_regions), d, mi, child_hot) in &children {
                 let m = &moves[mi];
                 let move_weight = if Some(mi) == packer || Some(mi) == merger || Some(mi) == unblocker { 0 } else { 1 };
                 seq += 1;
-                heap.push(Reverse(Pending {
+                // A move that raises the packed count starts a new line.
+                let line = if !fair {
+                    0
+                } else if packed > own.0 {
+                    next_line += 1;
+                    next_line
+                } else {
+                    node.pioneer
+                };
+                heap.push(Pending {
                     weight: node.weight + move_weight,
                     unpacked: u32::MAX - packed,
                     regions: child_regions,
@@ -331,7 +401,8 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                     box_idx: m.box_idx as u16,
                     to: m.to,
                     player: m.player,
-                }));
+                    line,
+                });
             }
             stats.generated += children.len() as u64;
             pending += children.len();
@@ -348,15 +419,15 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
 /// Pop the least move of the cell under the cursor, dropping exhausted
 /// cells; None when every cell is empty.
 fn pop_cyclic(
-    cells: &mut FxHashMap<Cell, BinaryHeap<Reverse<Pending>>>,
+    cells: &mut FxHashMap<Cell, CellQueue>,
     rotation: &mut Vec<Cell>,
     cursor: &mut usize,
 ) -> Option<Pending> {
     while !rotation.is_empty() {
         *cursor %= rotation.len();
         let cell = rotation[*cursor];
-        match cells.get_mut(&cell).and_then(|h| h.pop()) {
-            Some(Reverse(e)) => {
+        match cells.get_mut(&cell).and_then(|q| q.pop()) {
+            Some(e) => {
                 *cursor += 1;
                 return Some(e);
             }
