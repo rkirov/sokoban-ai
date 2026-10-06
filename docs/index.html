@@ -183,12 +183,12 @@ pre.mermaid { background: var(--surface); border: 1px solid var(--rule); border-
 <header class="hero">
   <div class="eyebrow">sokoban-ai · how the solver works</div>
   <h1>Sokoban Solver Field Notes</h1>
-  <p class="lede">A reference for the Rust solver in <a href="https://github.com/rkirov/sokoban-ai">rkirov/sokoban-ai</a>: what each part does, why it is there, how it stays correct, and where it lives in the code. At 10 seconds per level it solves 488 of 493 Microban levels and 153–157 of 163 SokHard levels, more than YASS, Festival and Takaken report on that pack. Given 40 seconds it solves all of SokHard.</p>
+  <p class="lede">A reference for the Rust solver in <a href="https://github.com/rkirov/sokoban-ai">rkirov/sokoban-ai</a>: what each part does, why it is there, how it stays correct, and where it lives in the code. At 10 seconds per level it solves 489 of 493 Microban levels and 155 of 163 SokHard levels, more than YASS, Festival and Takaken report on that pack. Given 40 seconds it solves all of SokHard.</p>
   <div class="meta">
     <span>~5,700 lines of Rust in <code>src/</code></span>
     <span>36 tests</span>
     <span>One dependency (<code>rustc-hash</code>)</span>
-    <span>Code pointers link to commit <code>2b4e72d</code></span>
+    <span>Code pointers link to commit <code>a92ea29</code></span>
   </div>
 </header>
 
@@ -199,7 +199,7 @@ pre.mermaid { background: var(--surface); border: 1px solid var(--rule); border-
 <ul>
   <li><strong>Forward A*</strong> finds push-optimal solutions on small and medium levels.</li>
   <li><strong>FESS</strong> (feature-space search over whole-box moves, guided by a packing plan) handles large levels that need a plan.</li>
-  <li><strong>Backward search</strong> starts from the solved position and pulls boxes. Levels cramped around their goals are easy in this direction. It runs twice, once optimal and once greedy.</li>
+  <li><strong>Backward search</strong> starts from the solved position and pulls boxes. Levels cramped around their goals are easy in this direction. It runs twice, both times greedy: once over single pulls and once over macro pulls, where one box is pulled any distance.</li>
 </ul>
 <p>All four share one board model, one lower bound (a min-cost matching of boxes to goals), and a stack of deadlock detectors. Every detector is <em>sound</em>: it never declares a solvable position dead.</p>
 </div>
@@ -256,8 +256,8 @@ flowchart LR
   B --> T3["Hotspots · hotspots.rs"]
   P1 --> A["Forward A* · solver.rs"]
   P1 --> F["FESS · fess.rs"]
-  P1 --> K1["Backward w=1 · solver.rs"]
-  P1 --> K3["Backward w=3"]
+  P1 --> K1["Greedy backward · solver.rs"]
+  P1 --> K3["Greedy backward, macro pulls"]
   P2 --> A
   T1 --> A
   T1 --> F
@@ -415,7 +415,7 @@ flowchart LR
 <h3 id="astar">Forward A*</h3>
 <div class="prose">
 <p>Best-first search over pushes, ordered by <code>f = g + h</code>, with the matching as <code>h</code>. The bound is consistent (it changes by at most 1 per push), so the first time a position is popped it has its shortest push count, and duplicates can be dropped when popped. Queue entries are only <code>(parent, box, direction)</code>; a child is built and checked only when popped. Keys are small integers, so an array of buckets (by f, then h, newest first) replaces a binary heap.</p>
-<div class="pointers"><span class="where">src/solver.rs:162 solve</span><span class="where">src/solver.rs:111 BucketQueue</span></div>
+<div class="pointers"><span class="where">src/solver.rs:169 solve</span><span class="where">src/solver.rs:118 BucketQueue</span></div>
 </div>
 <ol class="flow">
   <li><strong>Materialize</strong> the child from its parent and push, and flood the player's region.</li>
@@ -428,8 +428,9 @@ flowchart LR
 <h3 id="backward">Backward search</h3>
 <div class="prose">
 <p>The backward search starts from the solved position (one root per player region of the goal-filled board) and <em>pulls</em> boxes until they sit on the start squares with the player connected to the start. Its bound is the matching over <code>start_dist</code>, and its pruning uses the backward dead squares and the mirror dead-set tables. It returns forward pushes by reversing the path.</p>
-<p>The portfolio runs it twice: optimal (<code>f = g + h</code>) and greedy (<code>f = h</code>). The two orderings solve different levels: greedy dives straight for the start position and solves many crowded levels the optimal search cannot finish, while the optimal search covers levels where greedy gets lost. The greedy search expands each position once: its ordering ignores the push count, so re-expanding a position reached again by a shorter path would only repeat work. That one rule took SokHard from about 123 to 146.</p>
-<div class="pointers"><span class="where">src/solver.rs:442 solve_backward</span></div>
+<p>The search can run optimally (<code>f = g + h</code>), weighted, or greedily (<code>f = h</code>); the portfolio runs it greedily, twice. The two orderings solve different levels: greedy dives straight for the start position and solves many crowded levels the optimal search cannot finish, An optimal backward thread used to cover levels where greedy gets lost; a second greedy thread over macro pulls turned out to be worth more (below). The greedy search expands each position once: its ordering ignores the push count, so re-expanding a position reached again by a shorter path would only repeat work. That one rule took SokHard from about 123 to 146.</p>
+<p>The second greedy thread moves boxes with <em>macro pulls</em>: one box pulled any number of steps while the player walks freely, the same move shape FESS uses forward. Search depth then counts box moves instead of single pulls, which helps on large levels with long corridors. Alone it is much weaker on SokHard (112 levels against 152), but it solves levels nothing else does, such as XSokoban #14. A solution's macro pulls are expanded back into single pulls from each parent position before the answer is replayed. <span class="where">src/macros.rs generate_pulls, unit_pulls</span></p>
+<div class="pointers"><span class="where">src/solver.rs:492 solve_backward</span></div>
 </div>
 <ol class="flow">
   <li><strong>Materialize.</strong> Copy the parent's boxes in parent order and move one. Keeping the order means matching row <em>i</em> is still box <em>i</em>. A sorted copy is used as the key.</li>
@@ -443,7 +444,7 @@ flowchart LR
 <h3 id="fess">FESS over macro moves</h3>
 <div class="prose">
 <p>Best-first search is weak on large rearrangement puzzles: the right plan often makes the distance estimate worse before it gets better. FESS (after Festival) maps every position to a small <em>feature cell</em>, here (boxes packed according to the plan, number of free-space regions). It then cycles over the occupied cells, taking one move from each per visit, so progress in any feature gets its own share of time. A child that is worse than its parent's cell stays in the parent's cell instead of opening a worse one.</p>
-<div class="pointers"><span class="where">src/fess.rs:92 solve</span><span class="where">src/fess.rs:350 pop_cyclic</span><span class="where">src/fess.rs:53 better</span></div>
+<div class="pointers"><span class="where">src/fess.rs:148 solve</span><span class="where">src/fess.rs:418 pop_cyclic</span><span class="where">src/fess.rs:53 better</span></div>
 </div>
 <pre class="code"><span class="c">/// Feature cell: (packed boxes, free-space regions).</span>
 <span class="k">type</span> Cell = (u32, u32);
@@ -454,8 +455,9 @@ flowchart LR
 }</pre>
 <div class="twocol">
   <div class="card"><h4>Macro moves</h4><p>A move is one box pushed any number of times while the player walks freely, so search depth counts box moves, not pushes. For each box, a breadth-first search over (box square, player side) finds every destination. One depth-first search per box finds articulation points, which say which sides of each square the player can walk between, and give each move's region count in O(1). <span class="where">src/macros.rs:285 generate</span></p></div>
-  <div class="card"><h4>Advisors</h4><p>Inside a cell, moves are taken by accumulated weight. Advised moves cost 0 and all others cost 1. The three advisors pick the best move that packs a box, the best move that merges free regions, and the best move that reduces the number of hotspot boxes. <span class="where">src/fess.rs:92</span></p></div>
+  <div class="card"><h4>Advisors</h4><p>Inside a cell, moves are taken by accumulated weight. Advised moves cost 0 and all others cost 1. The three advisors pick the best move that packs a box, the best move that merges free regions, and the best move that reduces the number of hotspot boxes. <span class="where">src/fess.rs:148</span></p></div>
   <div class="card"><h4>Pruning</h4><p>Positions chosen for expansion get the full checks: corrals, frozen boxes, and the matching with frozen walls. Each child gets the cheap ones: freeze and dead sets.</p></div>
+  <div class="card"><h4>Fair lines of play</h4><p>Every queued move belongs to a line: the ancestor that first reached its packed count, or a new line if the move raises the count. Within a cell, lines are served round-robin. Without this, the first line to reach a cell floods it with advised (weight 0) moves, and a different line arriving later, often the one that did not plug a door on the way, waits behind all of them. <span class="where">src/fess.rs CellQueue</span></p></div>
   <div class="card"><h4>Completeness</h4><p>Every generated move is eventually expanded unless it is a proven deadlock or a duplicate. So an empty queue proves the level unsolvable. Plans and advisors only change the order of work.</p></div>
 </div>
 </section>
@@ -489,14 +491,14 @@ flowchart LR
 
 <section id="portfolio">
 <h2>Portfolio and safety</h2>
-<pre class="code"><span class="c">// src/main.rs:40</span>
+<pre class="code"><span class="c">// src/main.rs:41</span>
 <span class="k">const</span> DEFAULT: [Strategy; 4] =
-    [Strategy::Optimal, Strategy::Fess, Strategy::Backward(1), Strategy::Backward(0)];</pre>
+    [Strategy::Optimal, Strategy::Fess, Strategy::Backward(0), Strategy::BackwardMacro];</pre>
 <div class="twocol">
-  <div class="card"><h4>Only solutions stop the race</h4><p>Solutions are verified by replay, but "unsolvable" verdicts cannot be. A verdict therefore ends only its own thread, so one unsound strategy cannot stop the others. If a solution appears after another thread claimed "unsolvable", the program prints a soundness warning. <span class="where">src/main.rs:88 solve_auto</span></p></div>
+  <div class="card"><h4>Only solutions stop the race</h4><p>Solutions are verified by replay, but "unsolvable" verdicts cannot be. A verdict therefore ends only its own thread, so one unsound strategy cannot stop the others. If a solution appears after another thread claimed "unsolvable", the program prints a soundness warning. <span class="where">src/main.rs:94 solve_auto</span></p></div>
   <div class="card"><h4>Optimal when possible</h4><p>Earlier strategies win ties and forward A* is first. So a reported solution is push-optimal whenever A* finished within the budget.</p></div>
-  <div class="card"><h4>Memory watchdog</h4><p>A background thread polls resident memory from <code>/proc/self/status</code>. At the limit (default half of RAM, or <code>--memory-limit</code>) it stops every search, which then reports a timeout instead of exhausting the machine. FESS also caps its queue at 20 million moves. <span class="where">src/main.rs:134</span></p></div>
-  <div class="card"><h4>Why these four</h4><p>Each strategy was measured for the levels only it solves, then head-to-head on every pack. Greedy backward search solves fewer levels alone than optimal backward search, but the two together solve more than any other pair: replacing a weighted (w = 3) backward thread with greedy gained 9 SokHard and 3 Sasquatch levels.</p></div>
+  <div class="card"><h4>Memory watchdog</h4><p>A background thread polls resident memory from <code>/proc/self/status</code>. At the limit (default half of RAM, or <code>--memory-limit</code>) it stops every search, which then reports a timeout instead of exhausting the machine. FESS also caps its queue at 20 million moves. <span class="where">src/main.rs:140</span></p></div>
+  <div class="card"><h4>Why these four</h4><p>Each strategy was measured for the levels only it solves, then head-to-head on every pack. The two greedy backward threads differ only in move shape, yet each solves levels the other cannot: single pulls dominate SokHard, macro pulls reach levels like XSokoban #14. They replaced an optimal and a weighted backward thread, gaining SokHard, Sasquatch, XSokoban and Microban levels.</p></div>
 </div>
 </section>
 
@@ -509,8 +511,8 @@ flowchart LR
 <tbody>
 <tr><td>Dead-set tables are exact</td><td>Agreement with exhaustive solving of every small sub-position</td><td><code>deadsets.rs:390</code></td></tr>
 <tr><td>No real solution position is ever marked dead</td><td>Replay solutions; every position must be alive, forward and backward</td><td><code>deadsets.rs:440</code></td></tr>
-<tr><td>Macro moves equal all one-box push sequences</td><td>Brute-force comparison and replay</td><td><code>macros.rs:489</code></td></tr>
-<tr><td>O(1) region counts are right</td><td>Brute-force region counting</td><td><code>macros.rs:582</code></td></tr>
+<tr><td>Macro moves equal all one-box push sequences</td><td>Brute-force comparison and replay</td><td><code>macros.rs:522</code></td></tr>
+<tr><td>O(1) region counts are right</td><td>Brute-force region counting</td><td><code>macros.rs:615</code></td></tr>
 <tr><td>One-row matching re-solve equals a full solve</td><td>Pseudo-random matrices, square and rectangular, every row perturbed</td><td><code>matching.rs:284</code></td></tr>
 <tr><td>Parking in corridors stays possible</td><td>Microban 1 #10 must solve</td><td><code>tests.rs:195</code></td></tr>
 <tr><td>Backward search does not merge mirror images</td><td>A symmetric one-push level must solve</td><td><code>tests.rs:236</code></td></tr>
@@ -546,7 +548,7 @@ flowchart LR
 </div>
 <figure class="chart" id="chartCal"></figure>
 <div class="twocol">
-  <div class="card"><h4>Large levels</h4><p>XSokoban (67/90) and Holland (61–62/81) are not limited by time. On most XSokoban misses FESS reaches a near-complete position that is already dead, and the fatal move happened many moves earlier, for example a box plugging the only door to the goal room. The rest stall early because the plan gives no sense of progress (diagonal goal rooms, parking plans). Festival-style learned deadlock patterns were built and measured, but their proofs did not succeed within a useful budget here.</p></div>
+  <div class="card"><h4>Large levels</h4><p>XSokoban (68/90) and Holland (62/81) are not limited by time. On most XSokoban misses FESS reaches a near-complete position that is already dead, and the fatal move happened many moves earlier, for example a box plugging the only door to the goal room. The rest stall early because the plan gives no sense of progress (diagonal goal rooms, parking plans). Festival-style learned deadlock patterns were built and measured, but their proofs did not succeed within a useful budget here.</p></div>
   <div class="card"><h4>Dense levels</h4><p>SokHard is limited only by time: every level is solved within 40 s, almost all by the greedy backward thread, so its speed converts directly into solves. Sasquatch runs into the memory cap after 25–50 s.</p></div>
   <div class="card"><h4>Reinforcement learning</h4><p>Only after the classical techniques are exhausted, and only as an advisor inside FESS, never as something that prunes.</p></div>
 </div>
@@ -592,7 +594,7 @@ flowchart LR
   const DIRS = [[0,-1],[0,1],[-1,0],[1,0]]; // U D L R, as level.rs
 
   // Code pointers (file.rs:line) link to the exact commit on GitHub.
-  const SHA = "2b4e72d0107a5610bb503a7cd3d305544d723b2b";
+  const SHA = "a92ea29bf86a8f25ea108832779246f6f9183224";
   const REPO = "https://github.com/rkirov/sokoban-ai/blob/" + SHA + "/";
   document.querySelectorAll(".where, td code, pre.code .c").forEach(node => {
     const m = node.textContent.match(/(?:src\/)?([a-z_]+\.rs):(\d+)/);
@@ -783,13 +785,13 @@ flowchart LR
 
   // Results table.
   const SCORE = [
-    ["Microban I–IV", 493, 488, "488", 477, null, null],
-    ["XSokoban", 90, 67, "67", null, 88, 85],
+    ["Microban I–IV", 493, 489, "489", 477, null, null],
+    ["XSokoban", 90, 68, "68", null, 88, 85],
     ["SokEvo", 107, 107, "107", null, 107, 107],
     ["Grigr2001", 100, 93, "93", null, 96, 96],
-    ["Holland", 81, 62, "61–62", null, 65, 68],
-    ["Sasquatch", 50, 32, "32", null, 41, 43],
-    ["SokHard", 163, 157, "153–157", 117, 134, 163]
+    ["Holland", 81, 62, "62", null, 65, 68],
+    ["Sasquatch", 50, 33, "33", null, 41, 43],
+    ["SokHard", 163, 155, "155", 117, 134, 163]
   ];
   const st2 = document.getElementById("score");
   st2.innerHTML = "<thead><tr><th>Pack</th><th class='num'>Levels</th><th class='num'>This solver</th><th class='num'>YASS</th><th class='num'>Festival / Sokolution</th><th>Solved fraction</th></tr></thead>";
@@ -851,6 +853,8 @@ flowchart LR
     ["Portfolio", "Weighted forward A* thread (w = 3, then 5)", "No levels only it solved"],
     ["Portfolio", "Weighted backward replacing optimal backward", "Stronger alone (70 vs 61) but the portfolio dropped 97 → 87"],
     ["Portfolio", "Weighted backward (w = 3) as the second backward thread", "Replaced by greedy backward: SokHard 116/119 vs 127/126, Sasquatch 29 vs 32, Microban 488 vs 486"],
+    ["Portfolio", "Optimal backward thread", "Replaced by greedy backward over macro pulls: XSokoban, Holland, Sasquatch and SokHard levels gained, Microban IV #99 and Holland #65 lost"],
+    ["Portfolio", "Second greedy backward thread with a seeded child order", "No gain over the optimal backward thread it would have replaced"],
     ["Portfolio", "Greedy or weighted forward thread", "Alone on SokHard 47 and 59 levels, adding 2 and 0 levels the portfolio missed"],
     ["Deadlocks", "Quadruple dead-set tables (≤ 50 squares)", "36% fewer nodes, no more levels solved"],
     ["Deadlocks", "Pair lower bound (exact two-box distances over disjoint pairs)", "14–28% fewer nodes but slower overall"],
