@@ -32,6 +32,8 @@ enum Strategy {
     /// Backward (pull) search from the goal with f = g + w*h (w = 1:
     /// optimal; w = 0: greedy, f = h): cramped goal areas are easy backward.
     Backward(u32),
+    /// Greedy backward search over macro pulls (one box, any distance).
+    BackwardMacro,
     /// Feature-space search over macro moves.
     Fess,
 }
@@ -47,6 +49,7 @@ impl Strategy {
             _ if name.starts_with("backward:") => Strategy::Backward(name["backward:".len()..].parse().ok()?),
             "fess" => Strategy::Fess,
             "backward-greedy" => Strategy::Backward(0),
+            "backward-macro" => Strategy::BackwardMacro,
             _ => return None,
         })
     }
@@ -55,6 +58,7 @@ impl Strategy {
         match self {
             Strategy::Optimal => "fwd-optimal",
             Strategy::Backward(0) => "backward-greedy",
+            Strategy::BackwardMacro => "backward-macro",
             Strategy::Backward(1) => "backward",
             Strategy::Backward(_) => "backward-weighted",
             Strategy::Fess => "fess",
@@ -64,6 +68,9 @@ impl Strategy {
     fn run(&self, board: &Board, opts: &Options) -> Outcome {
         match self {
             Strategy::Optimal => solver::solve(board, &Options { mode: Mode::OptimalPushes, ..opts.clone() }),
+            Strategy::BackwardMacro => {
+                solver::solve_backward(board, &Options { mode: Mode::Greedy, macro_pulls: true, ..opts.clone() })
+            }
             Strategy::Backward(w) => {
                 let mode = match w { 0 => Mode::Greedy, 1 => Mode::OptimalPushes, _ => Mode::Weighted(*w) };
                 solver::solve_backward(board, &Options { mode, ..opts.clone() })

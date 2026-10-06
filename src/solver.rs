@@ -38,6 +38,9 @@ pub struct Options {
     /// Cooperative cancellation for racing strategies: when set, the search
     /// returns Exhausted at its next periodic check.
     pub stop: Arc<AtomicBool>,
+    /// Backward search: generate macro pulls (one box, any distance)
+    /// instead of single pulls.
+    pub macro_pulls: bool,
 }
 
 impl Default for Options {
@@ -48,6 +51,7 @@ impl Default for Options {
             time_limit: Duration::from_secs(60),
             corral: true,
             stop: Arc::new(AtomicBool::new(false)),
+            macro_pulls: false,
         }
     }
 }
@@ -89,6 +93,9 @@ struct Node {
     parent: u32,
     push_box_from: u16,
     push_dir: u8,
+    /// Backward search: where the pulled box ended (the move may be a
+    /// macro pull of many steps).
+    pull_to: u16,
 }
 
 // Naive tunnel macros (force a box through any wall-flanked goal-free run)
@@ -108,9 +115,9 @@ enum Candidates {
 /// over (f, h, newest-first) gives, in O(1) per operation instead of
 /// O(log n), with 8-byte entries. An entry is (parent, box_from, dir); the
 /// child state is materialized only when popped.
-struct BucketQueue {
+struct BucketQueue<T> {
     /// buckets[f][h]: entries with that key, pushed in order.
-    buckets: Vec<Vec<Vec<(u32, u16, u8)>>>,
+    buckets: Vec<Vec<Vec<T>>>,
     /// min_h[f]: no entry with this f has a smaller h.
     min_h: Vec<usize>,
     /// No entry has a smaller f (pushes may lower it: weighted f can drop).
@@ -118,12 +125,12 @@ struct BucketQueue {
     len: usize,
 }
 
-impl BucketQueue {
+impl<T> BucketQueue<T> {
     fn new() -> Self {
         BucketQueue { buckets: Vec::new(), min_h: Vec::new(), min_f: usize::MAX, len: 0 }
     }
 
-    fn push(&mut self, f: u64, h: u32, entry: (u32, u16, u8)) {
+    fn push(&mut self, f: u64, h: u32, entry: T) {
         let (f, h) = (f as usize, h as usize);
         if self.buckets.len() <= f {
             self.buckets.resize_with(f + 1, Vec::new);
@@ -139,7 +146,7 @@ impl BucketQueue {
         self.len += 1;
     }
 
-    fn pop(&mut self) -> Option<(u32, (u32, u16, u8))> {
+    fn pop(&mut self) -> Option<(u32, T)> {
         if self.len == 0 {
             return None;
         }
@@ -269,7 +276,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
         }
 
         let node_idx = arena.len() as u32;
-        arena.push(Node { boxes, player, g, parent, push_box_from: box_from, push_dir: dir });
+        arena.push(Node { boxes, player, g, parent, push_box_from: box_from, push_dir: dir, pull_to: 0 });
         stats.expanded += 1;
 
         if h == 0 {
@@ -357,7 +364,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                             freeze: &mut FreezeChecker,
                             matcher: &mut Matcher,
                             stats: &mut Stats,
-                            open: &mut BucketQueue| {
+                            open: &mut BucketQueue<(u32, u16, u8)>| {
             let b = node_boxes[bi];
             let to = board.neighbors[b as usize][d];
             if to == NONE || box_at[to as usize] || board.dead[to as usize] {
@@ -425,6 +432,49 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
 
     stats.time = start_time.elapsed();
     Outcome::Unsolvable { stats }
+}
+
+/// Forward pushes of the backward path ending at `node_idx`: each pull
+/// (possibly a macro pull) is expanded into unit pulls from its parent
+/// position, and reversed pulls become forward pushes. Walking from the
+/// solved node back to the root visits the moves in forward order.
+fn backward_pushes(board: &Board, arena: &[Node], node_idx: u32) -> Vec<(u16, u8)> {
+    let mut macro_gen = crate::macros::MacroGen::new(board);
+    let mut box_at = vec![false; board.num_squares];
+    let mut reach = vec![false; board.num_squares];
+    let mut queue = Vec::new();
+    let mut pushes = Vec::new();
+    let mut cur = node_idx;
+    while arena[cur as usize].parent != NO_PARENT {
+        let n = &arena[cur as usize];
+        let p = &arena[n.parent as usize];
+        box_at.iter_mut().for_each(|b| *b = false);
+        reach.iter_mut().for_each(|r| *r = false);
+        for &b in p.boxes.iter() {
+            box_at[b as usize] = true;
+        }
+        queue.clear();
+        queue.push(p.player);
+        reach[p.player as usize] = true;
+        while let Some(sq) = queue.pop() {
+            for &nb in &board.neighbors[sq as usize] {
+                if nb != NONE && !reach[nb as usize] && !box_at[nb as usize] {
+                    reach[nb as usize] = true;
+                    queue.push(nb);
+                }
+            }
+        }
+        let pulls = macro_gen
+            .unit_pulls(board, &mut box_at, |sq| reach[sq as usize], n.push_box_from, n.pull_to, n.player)
+            .expect("backward move replays");
+        // A pull moves the box from s onto its neighbour t on `side`; the
+        // forward push takes it from t back to s.
+        for &(s, side) in pulls.iter().rev() {
+            pushes.push((board.neighbors[s as usize][side], OPP[side] as u8));
+        }
+        cur = n.parent;
+    }
+    pushes
 }
 
 /// Backward (pull) search: start from the goal-filled board and pull boxes
@@ -513,7 +563,7 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
                 }
             }
             // Root entries carry the region's seed player square in box_from.
-            open.push(f_of(0, root_h), root_h, (NO_PARENT, sq, 0));
+            open.push(f_of(0, root_h), root_h, (NO_PARENT, sq, 0, 0));
         }
         for &b in goal_boxes.iter() {
             box_at[b as usize] = false;
@@ -523,8 +573,10 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
     // Solved matching state per arena node (see Matcher::save).
     let mut state_v: Vec<i64> = Vec::new();
     let mut state_p: Vec<u16> = Vec::new();
+    let mut macro_gen = crate::macros::MacroGen::new(board);
+    let mut moves = Vec::new();
     let mut pops = 0u64;
-    while let Some((h, (parent, box_from, dir))) = open.pop() {
+    while let Some((h, (parent, box_from, to, player_after))) = open.pop() {
         pops += 1;
         if stats.expanded >= opts.max_nodes
             || (pops % 512 == 0 && (start_time.elapsed() > opts.time_limit || opts.stopped()))
@@ -533,8 +585,8 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
             return Outcome::Exhausted { stats };
         }
 
-        // Materialize: for a pull entry, box_from moves to b+d and the player
-        // ends at b+2d.
+        // Materialize: an entry is (parent, box square, its destination,
+        // the player's square after the pull).
         // Boxes stay in the parent's order (the matching's rows are box
         // indices, so a child can warm-start from its parent's matching with
         // only the moved row changed); keys and the goal test use a sorted
@@ -543,12 +595,10 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
             (goal_boxes.clone(), box_from, 0, None)
         } else {
             let p = &arena[parent as usize];
-            let to = board.neighbors[box_from as usize][dir as usize];
-            let player = board.neighbors[to as usize][dir as usize];
             let mut boxes = p.boxes.clone();
             let idx = boxes.iter().position(|&b| b == box_from).unwrap();
             boxes[idx] = to;
-            (boxes, player, p.g + 1, Some(idx))
+            (boxes, player_after, p.g + 1, Some(idx))
         };
         let mut sorted = boxes.clone();
         sorted.sort_unstable();
@@ -614,7 +664,7 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
         };
         let h_exact = exact as u32;
         if h_exact > h {
-            open.push(f_of(g, h_exact), h_exact, (parent, box_from, dir));
+            open.push(f_of(g, h_exact), h_exact, (parent, box_from, to, player_after));
             stats.requeued += 1;
             continue;
         }
@@ -627,7 +677,8 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
             g,
             parent,
             push_box_from: box_from,
-            push_dir: dir,
+            push_dir: 0,
+            pull_to: to,
         });
         stats.expanded += 1;
         // Solved matching state per stored node, for its children's warm start.
@@ -638,21 +689,35 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
         if h_exact == 0 && reach_stamp[board.start_player as usize] == reach_gen {
             if sorted.as_ref() == board.start_boxes.as_slice() {
                 stats.time = start_time.elapsed();
-                // Reversed pulls become forward pushes; walking from the
-                // solved node back to the root visits them in forward order.
-                let mut pushes = Vec::with_capacity(g as usize);
-                let mut cur = node_idx;
-                while arena[cur as usize].parent != NO_PARENT {
-                    let n = &arena[cur as usize];
-                    let pulled_to = board.neighbors[n.push_box_from as usize][n.push_dir as usize];
-                    pushes.push((pulled_to, OPP[n.push_dir as usize] as u8));
-                    cur = n.parent;
-                }
+                let pushes = backward_pushes(board, &arena, node_idx);
                 return Outcome::Solved { pushes, stats };
             }
         }
         let node = &arena[node_idx as usize];
         let node_boxes = &node.boxes;
+
+        if opts.macro_pulls {
+            // Macro pulls: one box pulled any number of steps (see macros.rs).
+            macro_gen.generate_pulls(board, node_boxes, &mut box_at, |sq| reach_stamp[sq as usize] == reach_gen, &mut moves);
+            for mv in &moves {
+                if board.backward_dead[mv.to as usize] || back_sets.moved_box_dead(node_boxes, mv.box_idx, mv.to, mv.player) {
+                    continue;
+                }
+                let bi = mv.box_idx;
+                let h_child = matcher.row_lower_bound(bi, exact, |i, j| {
+                    let sq = if i == bi { mv.to } else { node_boxes[i] };
+                    let dist = board.start_dist[j][sq as usize];
+                    (dist != crate::level::INF).then_some(dist)
+                });
+                let Some(h_child) = h_child else {
+                    stats.deadlocks += 1;
+                    continue;
+                };
+                stats.generated += 1;
+                open.push(f_of(node.g + 1, h_child as u32), h_child as u32, (node_idx, mv.from, mv.to, mv.player));
+            }
+            continue;
+        }
 
         // Pulls: box at b, player reaches b+d, steps to b+2d.
         for bi in 0..node_boxes.len() {
@@ -685,7 +750,7 @@ pub fn solve_backward(board: &Board, opts: &Options) -> Outcome {
                     continue;
                 };
                 stats.generated += 1;
-                open.push(f_of(node.g + 1, h_child as u32), h_child as u32, (node_idx, b, d as u8));
+                open.push(f_of(node.g + 1, h_child as u32), h_child as u32, (node_idx, b, to, beyond));
             }
         }
     }

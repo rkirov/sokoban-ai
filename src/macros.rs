@@ -376,6 +376,39 @@ impl MacroGen {
         stopped
     }
 
+    /// Expand one macro PULL of the box on `from` (to `to`, player ending
+    /// on `player`) into unit pulls `(box_square, side)`: the box on
+    /// box_square moves to its neighbour on `side`. `box_at`/`reach`
+    /// describe the position before the move.
+    pub fn unit_pulls(
+        &mut self,
+        board: &Board,
+        box_at: &mut [bool],
+        reach: impl Fn(u16) -> bool,
+        from: u16,
+        to: u16,
+        player: u16,
+    ) -> Option<Vec<(u16, usize)>> {
+        // Search everything, then take the state "box on `to`, player on the
+        // side where `player` is": every side in one player region shares
+        // its predecessor, so this works for any square of the region.
+        let root = |side: usize| reach(board.neighbors[from as usize][side]);
+        self.search(board, box_at, from, Kind::Pull, root, |_, _, _, _| false);
+        let side = (0..4).find(|&d| board.neighbors[to as usize][d] == player)?;
+        let mut st = (to as usize * 4 + side) as u32;
+        if self.visited[st as usize] != self.stamp {
+            return None;
+        }
+        let mut pulls = Vec::new();
+        while self.prev[st as usize] != u32::MAX {
+            let p = self.prev[st as usize] as usize;
+            pulls.push(((p / 4) as u16, p % 4));
+            st = p as u32;
+        }
+        pulls.reverse();
+        Some(pulls)
+    }
+
     /// Expand one macro move into unit pushes `(box_from_square, dir)`,
     /// using the same search with predecessor links. `box_at`/`reach`
     /// describe the position before the move.
