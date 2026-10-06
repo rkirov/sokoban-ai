@@ -384,3 +384,27 @@ fn gate_pushes_are_forced_only_through_articulation_squares() {
     // Inside an open room nothing is forced.
     assert!(!b.forced[sq(1, 2)][right]);
 }
+
+/// Backward search in both move shapes (unit pulls and macro pulls) must
+/// return solutions that replay on the original level text: the pulls are
+/// expanded back into unit moves from each parent position.
+#[test]
+fn backward_solutions_replay_in_both_move_shapes() {
+    let text = std::fs::read_to_string("levels/microban1.txt").unwrap();
+    let mut solved = [0; 2];
+    for lvl in parse_collection(&text).iter().take(40) {
+        let b = Board::from_level(lvl).unwrap();
+        if b.goals.len() != b.start_boxes.len() {
+            continue;
+        }
+        for (k, macro_pulls) in [false, true].into_iter().enumerate() {
+            let opts = Options { mode: Mode::Greedy, macro_pulls, max_nodes: 200_000, ..Options::default() };
+            if let Outcome::Solved { pushes, .. } = crate::solver::solve_backward(&b, &opts) {
+                let moves = pushes_to_moves(&b, &pushes).expect("reconstruction");
+                assert_eq!(verify_lurd(lvl, &moves), Ok(pushes.len()), "{} macro={macro_pulls}", lvl.name);
+                solved[k] += 1;
+            }
+        }
+    }
+    assert!(solved[0] >= 35 && solved[1] >= 35, "{solved:?}");
+}
