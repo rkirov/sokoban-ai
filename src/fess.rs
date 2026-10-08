@@ -64,9 +64,9 @@ struct Node {
     to: u16,
     weight: u32,
     cell: Cell,
-    /// Line of play: the ancestor that first reached this node's packed
-    /// count (see CellQueue).
-    pioneer: u32,
+    /// Line of play: the first move from the start position on this
+    /// node's path (see CellQueue).
+    line: u32,
 }
 
 const NO_PARENT: u32 = u32::MAX;
@@ -86,21 +86,20 @@ struct Pending {
     box_idx: u16,
     to: u16,
     player: u16,
-    /// Line this move is queued under: the parent's pioneer, or a fresh id
-    /// (>= NEW_LINE) when the move raises the packed count.
+    /// Line this move is queued under (see CellQueue).
     line: u32,
 }
 
-/// Fresh line ids start here (node indices stay below).
-const NEW_LINE: u32 = 1 << 31;
-
-/// One cell's pending moves, grouped by line of play and served
-/// round-robin by how often each line has been served. Why: once one line
-/// reaches a cell, its descendants fill that cell with advisor-approved
-/// (weight 0) moves; a different line arriving later — often the one that
-/// did not plug a door on the way — would wait behind all of them. Fair
-/// service gives every line its share at once. Only the order of work
-/// changes, so completeness is unaffected.
+/// One cell's pending moves, grouped by line of play — the first move from
+/// the start position — and served round-robin by how often each line has
+/// been served. Why: once one line reaches a cell, its descendants fill that
+/// cell with advisor-approved (weight 0) moves, and a line arriving later
+/// waits behind all of them. On XSokoban #28 the right first move (parking a
+/// box in a niche) gains nothing the features can see, and its subtree used
+/// to starve behind lines that pack fast and die; with fair lines it is
+/// solved in 2 s. (Lines that restart at every packing gain were measured
+/// too: they multiply into thousands and dilute the share again.) Only the
+/// order of work changes, so completeness is unaffected.
 #[derive(Default)]
 struct CellQueue {
     lines: FxHashMap<u32, BinaryHeap<Reverse<Pending>>>,
@@ -159,7 +158,6 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
     let mut arena: Vec<Node> = Vec::new();
     let mut expanded: FxHashMap<(Box<[u16]>, u16), ()> = FxHashMap::default();
     let mut cells: FxHashMap<Cell, CellQueue> = FxHashMap::default();
-    let mut next_line = NEW_LINE;
     let mut rotation: Vec<Cell> = Vec::new();
     let mut cursor = 0usize;
     let mut pending = 0usize;
@@ -196,7 +194,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
         box_idx: 0,
         to: 0,
         player: board.start_player,
-        line: NEW_LINE,
+        line: 0,
     });
 
     loop {
@@ -262,7 +260,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                     to: entry.to,
                     weight,
                     cell: (0, 0),
-                    pioneer: 0,
+                    line: 0,
                 });
                 stats.time = start_time.elapsed();
                 let pushes = reconstruct(board, &arena, node_idx, &mut macro_gen);
@@ -324,8 +322,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                 best_cell = cell;
             }
             let node_idx = arena.len() as u32;
-            let pioneer = if entry.line >= NEW_LINE { node_idx } else { entry.line };
-            arena.push(Node { boxes, player, parent: entry.parent, box_idx: entry.box_idx, to: entry.to, weight, cell, pioneer });
+            arena.push(Node { boxes, player, parent: entry.parent, box_idx: entry.box_idx, to: entry.to, weight, cell, line: entry.line });
             stats.expanded += 1;
             let node = &arena[node_idx as usize];
 
@@ -380,13 +377,8 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                 let m = &moves[mi];
                 let move_weight = if Some(mi) == packer || Some(mi) == merger || Some(mi) == unblocker { 0 } else { 1 };
                 seq += 1;
-                // A move that raises the packed count starts a new line.
-                let line = if packed > own.0 {
-                    next_line += 1;
-                    next_line
-                } else {
-                    node.pioneer
-                };
+                // Each first move from the start position starts a line.
+                let line = if node.parent == NO_PARENT { mi as u32 } else { node.line };
                 heap.push(Pending {
                     weight: node.weight + move_weight,
                     unpacked: u32::MAX - packed,
