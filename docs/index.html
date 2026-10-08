@@ -183,12 +183,12 @@ pre.mermaid { background: var(--surface); border: 1px solid var(--rule); border-
 <header class="hero">
   <div class="eyebrow">sokoban-ai · how the solver works</div>
   <h1>Sokoban Solver Field Notes</h1>
-  <p class="lede">A reference for the Rust solver in <a href="https://github.com/rkirov/sokoban-ai">rkirov/sokoban-ai</a>: what each part does, why it is there, how it stays correct, and where it lives in the code. At 10 seconds per level it solves 489 of 493 Microban levels and 155 of 163 SokHard levels, more than YASS, Festival and Takaken report on that pack. Given 40 seconds it solves all of SokHard.</p>
+  <p class="lede">A reference for the Rust solver in <a href="https://github.com/rkirov/sokoban-ai">rkirov/sokoban-ai</a>: what each part does, why it is there, how it stays correct, and where it lives in the code. At 10 seconds per level it solves 490 of 493 Microban levels and 156–157 of 163 SokHard levels, more than YASS, Festival and Takaken report on that pack. Given 40 seconds it solves all of SokHard.</p>
   <div class="meta">
     <span>~5,700 lines of Rust in <code>src/</code></span>
     <span>36 tests</span>
     <span>One dependency (<code>rustc-hash</code>)</span>
-    <span>Code pointers link to commit <code>a92ea29</code></span>
+    <span>Code pointers link to commit <code>5135344</code></span>
   </div>
 </header>
 
@@ -444,7 +444,7 @@ flowchart LR
 <h3 id="fess">FESS over macro moves</h3>
 <div class="prose">
 <p>Best-first search is weak on large rearrangement puzzles: the right plan often makes the distance estimate worse before it gets better. FESS (after Festival) maps every position to a small <em>feature cell</em>, here (boxes packed according to the plan, number of free-space regions). It then cycles over the occupied cells, taking one move from each per visit, so progress in any feature gets its own share of time. A child that is worse than its parent's cell stays in the parent's cell instead of opening a worse one.</p>
-<div class="pointers"><span class="where">src/fess.rs:148 solve</span><span class="where">src/fess.rs:418 pop_cyclic</span><span class="where">src/fess.rs:53 better</span></div>
+<div class="pointers"><span class="where">src/fess.rs:147 solve</span><span class="where">src/fess.rs:410 pop_cyclic</span><span class="where">src/fess.rs:53 better</span></div>
 </div>
 <pre class="code"><span class="c">/// Feature cell: (packed boxes, free-space regions).</span>
 <span class="k">type</span> Cell = (u32, u32);
@@ -455,9 +455,9 @@ flowchart LR
 }</pre>
 <div class="twocol">
   <div class="card"><h4>Macro moves</h4><p>A move is one box pushed any number of times while the player walks freely, so search depth counts box moves, not pushes. For each box, a breadth-first search over (box square, player side) finds every destination. One depth-first search per box finds articulation points, which say which sides of each square the player can walk between, and give each move's region count in O(1). <span class="where">src/macros.rs:285 generate</span></p></div>
-  <div class="card"><h4>Advisors</h4><p>Inside a cell, moves are taken by accumulated weight. Advised moves cost 0 and all others cost 1. The three advisors pick the best move that packs a box, the best move that merges free regions, and the best move that reduces the number of hotspot boxes. <span class="where">src/fess.rs:148</span></p></div>
+  <div class="card"><h4>Advisors</h4><p>Inside a cell, moves are taken by accumulated weight. Advised moves cost 0 and all others cost 1. The three advisors pick the best move that packs a box, the best move that merges free regions, and the best move that reduces the number of hotspot boxes. <span class="where">src/fess.rs:147</span></p></div>
   <div class="card"><h4>Pruning</h4><p>Positions chosen for expansion get the full checks: corrals, frozen boxes, and the matching with frozen walls. Each child gets the cheap ones: freeze and dead sets.</p></div>
-  <div class="card"><h4>Fair lines of play</h4><p>Every queued move belongs to a line: the ancestor that first reached its packed count, or a new line if the move raises the count. Within a cell, lines are served round-robin. Without this, the first line to reach a cell floods it with advised (weight 0) moves, and a different line arriving later, often the one that did not plug a door on the way, waits behind all of them. <span class="where">src/fess.rs CellQueue</span></p></div>
+  <div class="card"><h4>Fair lines of play</h4><p>Every queued move belongs to a line: the first move from the start position on its path. Within a cell, lines are served round-robin. Without this, the first line to reach a cell floods it with advised (weight 0) moves and the others starve. On XSokoban #28 the right first move parks a box in a niche, gains nothing the features can see, and used to starve; now it is solved in 2 s. <span class="where">src/fess.rs:104 CellQueue</span></p></div>
   <div class="card"><h4>Completeness</h4><p>Every generated move is eventually expanded unless it is a proven deadlock or a duplicate. So an empty queue proves the level unsolvable. Plans and advisors only change the order of work.</p></div>
 </div>
 </section>
@@ -548,7 +548,7 @@ flowchart LR
 </div>
 <figure class="chart" id="chartCal"></figure>
 <div class="twocol">
-  <div class="card"><h4>Large levels</h4><p>XSokoban (68/90) and Holland (62/81) are not limited by time. On most XSokoban misses FESS reaches a near-complete position that is already dead, and the fatal move happened many moves earlier, for example a box plugging the only door to the goal room. The rest stall early because the plan gives no sense of progress (diagonal goal rooms, parking plans). Festival-style learned deadlock patterns were built and measured, but their proofs did not succeed within a useful budget here.</p></div>
+  <div class="card"><h4>Large levels</h4><p>XSokoban (70/90) and Holland (62/81) are not limited by time. On most XSokoban misses FESS reaches a near-complete position that is already dead, and the fatal move happened many moves earlier, for example a box plugging the only door to the goal room. The rest stall early because the plan gives no sense of progress (diagonal goal rooms, parking plans). Festival-style learned deadlock patterns were built and measured, but their proofs did not succeed within a useful budget here.</p></div>
   <div class="card"><h4>Dense levels</h4><p>SokHard is limited only by time: every level is solved within 40 s, almost all by the greedy backward thread, so its speed converts directly into solves. Sasquatch runs into the memory cap after 25–50 s.</p></div>
   <div class="card"><h4>Reinforcement learning</h4><p>Only after the classical techniques are exhausted, and only as an advisor inside FESS, never as something that prunes.</p></div>
 </div>
@@ -594,7 +594,7 @@ flowchart LR
   const DIRS = [[0,-1],[0,1],[-1,0],[1,0]]; // U D L R, as level.rs
 
   // Code pointers (file.rs:line) link to the exact commit on GitHub.
-  const SHA = "a92ea29bf86a8f25ea108832779246f6f9183224";
+  const SHA = "5135344d87a17be1671eb49415cccd2901af94fc";
   const REPO = "https://github.com/rkirov/sokoban-ai/blob/" + SHA + "/";
   document.querySelectorAll(".where, td code, pre.code .c").forEach(node => {
     const m = node.textContent.match(/(?:src\/)?([a-z_]+\.rs):(\d+)/);
@@ -785,13 +785,13 @@ flowchart LR
 
   // Results table.
   const SCORE = [
-    ["Microban I–IV", 493, 489, "489", 477, null, null],
-    ["XSokoban", 90, 68, "68", null, 88, 85],
+    ["Microban I–IV", 493, 490, "490", 477, null, null],
+    ["XSokoban", 90, 70, "70", null, 88, 85],
     ["SokEvo", 107, 107, "107", null, 107, 107],
     ["Grigr2001", 100, 93, "93", null, 96, 96],
     ["Holland", 81, 62, "62", null, 65, 68],
     ["Sasquatch", 50, 33, "33", null, 41, 43],
-    ["SokHard", 163, 155, "155", 117, 134, 163]
+    ["SokHard", 163, 157, "156–157", 117, 134, 163]
   ];
   const st2 = document.getElementById("score");
   st2.innerHTML = "<thead><tr><th>Pack</th><th class='num'>Levels</th><th class='num'>This solver</th><th class='num'>YASS</th><th class='num'>Festival / Sokolution</th><th>Solved fraction</th></tr></thead>";
@@ -839,6 +839,8 @@ flowchart LR
 
   // Alternatives left out.
   const LEFT_OUT = [
+    ["FESS", "Lines of play that restart at every packing gain", "They multiply into thousands and dilute each other; first-move lines solve 3 more XSokoban levels"],
+    ["FESS", "Plan-guided greedy forward search, YASS-style scores (our order or YASS's own)", "0 of 6 XSokoban levels YASS solves instantly; YASS needs its packing-order phases with parking"],
     ["FESS", "Relaxed-plan progress on every level, not just those that park", "−1: a fixed sequence is more restrictive than the partial order"],
     ["FESS", "Plan removals only at start squares ≥ 3 or ≥ 6 steps from goals", "Within noise, also as a second FESS thread"],
     ["FESS", "Alternating cyclic cell visits with best-cell visits", "No change"],
