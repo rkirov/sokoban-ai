@@ -136,6 +136,9 @@ Same-machine reference: YASS 2.153 solves 117 SokHard levels at 10 s
 | Leaving a goal cluster to any non-backward-dead square (parking-aware consistency) | YASS's boxes come back from parking squares | FESS alone XSokoban 69 → 66 | rejected |
 | FESS with YASS's exact phased order (parked boxes feeding the last goals) and/or a plan-approach advisor | separate plan quality from plan execution | YASS's order: #66 17/29, #69 18/28, #31 15 steps, #50 5 (stuck at the first hard transport), same at 60 s; our parking plan + approach: XSokoban 69 → 67 | rejected |
 | Plan executor: depth-first over plan steps, each a best-first subgoal search over macro moves (4k expansions, 3 completions per step) | commit to one transport at a time, like YASS's phases | with YASS's order: #50 reaches step 5 of 28, nothing solved on the six levels | rejected (branch `exp-combo`) |
+| SokHard endgame diagnosis: lowest matching bound over time in greedy backward search | where do the remaining SokHard misses spend their time | #100 reaches h = 3 at 3.9 s and solves at 14.8 s; #154 h = 4 at 0.06 s, solves at 10 s; #83 h = 4 at 0.7 s, unsolved at 20 s. Plateau positions have almost every box on a start square; the last boxes must pass boxes already "home" | diagnosis |
+| Start ball: forward breadth-first ball around the start (20k / 100k / 1M positions), the backward search stops on meeting it | the plateau looked like a short endgame | no meeting on SokHard 100, 135, 83, 154 even at 1M positions: positions with h = 3–4 are many pushes from the start | rejected (branch `start-ball`) |
+| Backward packing order: packing analysis on start squares (a box leaves the start cluster by being pushed to a goal), greedy backward ranked by it lexicographically or additively (w = 2, 8) | the plateau is a packing problem in reverse | SokHard misses 0/6 in every variant (plain greedy: 2/6), 30–40% fewer nodes per second | rejected (branch `back-plan`) |
 
 ## Calibration facts
 
