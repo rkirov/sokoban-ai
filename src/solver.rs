@@ -10,6 +10,7 @@
 //! push distances is 1-Lipschitz per push) the first pop of a state has
 //! minimal g, so pop-time dedup preserves optimality in OptimalPushes mode.
 
+use crate::growcorral::GrowCorral;
 use crate::corral::{CorralAnalyzer, CorralResult};
 use crate::deadlock::FreezeChecker;
 use crate::level::{Board, NONE};
@@ -176,6 +177,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
     let mut freeze = FreezeChecker::new(board);
     let dead_sets = crate::deadsets::DeadSetTables::new(board, crate::deadsets::Direction::Forward);
     let mut corral = CorralAnalyzer::new(board);
+    let mut grow = GrowCorral::new(board);
     let mut matcher = Matcher::new();
     let equal_goals_boxes = board.goals.len() == board.start_boxes.len();
 
@@ -317,7 +319,15 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                     continue;
                 }
                 CorralResult::Restrict(pushes) => Candidates::Restricted(pushes),
-                CorralResult::NoPruning => Candidates::All,
+                // No PI-corral: grow one (merging unreachable areas and
+                // movable blocking boxes) before giving up on pruning.
+                CorralResult::NoPruning => {
+                    let reach: Vec<bool> = (0..board.num_squares).map(|q| reach_stamp[q] == reach_gen).collect();
+                    match grow.analyze(board, &box_at, &reach, &mut freeze, equal_goals_boxes) {
+                        Some(pushes) => Candidates::Restricted(pushes),
+                        None => Candidates::All,
+                    }
+                }
             }
         } else {
             Candidates::All

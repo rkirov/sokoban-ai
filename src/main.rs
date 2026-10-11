@@ -1,6 +1,7 @@
 mod corral;
 mod deadlock;
 mod deadsets;
+mod growcorral;
 mod fess;
 mod hotspots;
 mod level;
