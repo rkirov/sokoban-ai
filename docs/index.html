@@ -164,10 +164,11 @@ pre.mermaid { background: var(--surface); border: 1px solid var(--rule); border-
     <li><a href="#board">The board</a></li>
     <li><a href="#bound">The lower bound</a></li>
     <li><a href="#deadlocks">Deadlock detection</a></li>
-    <li><a href="#searches">The four searches</a>
+    <li><a href="#searches">The searches</a>
       <ol>
         <li><a href="#astar">Forward A*</a></li>
         <li><a href="#backward">Backward search</a></li>
+        <li><a href="#posearch">Packing-order search (YASS)</a></li>
         <li><a href="#fess">FESS</a></li>
       </ol></li>
     <li><a href="#plans">Plans and advisors</a></li>
@@ -413,7 +414,7 @@ flowchart LR
 </section>
 
 <section id="searches">
-<h2>The four searches</h2>
+<h2>The searches</h2>
 
 <h3 id="astar">Forward A*</h3>
 <div class="prose">
@@ -443,6 +444,16 @@ flowchart LR
   <li><strong>Requeue if the bound rose.</strong> The entry was queued with the O(m) dual bound. If the exact value is higher it goes back in at its true key; nothing has been stored yet.</li>
   <li><strong>Store and expand.</strong> Save the matching state, test for the start position, and generate pulls. Filter by backward dead squares and dead sets, then queue each child with its dual bound.</li>
 </ol>
+
+<h3 id="posearch">Packing-order search (YASS)</h3>
+<div class="prose">
+<p>The fourth thread first runs YASS's forward search for 3 seconds. It was re-derived from the YASS 2.153 source and then diff-tested against an instrumented YASS build that prints every position it expands: run both on the same level, find the first expansion where they differ, explain it, fix it, repeat.</p>
+<p><strong>The order.</strong> Put a box on every goal and peel them off backward. In each phase, every box that can be pulled off its goal to an unused start square is removed together. A box that can only move within a small part of the board is <em>parked</em> instead: pulled to a far square that becomes a temporary target, filled before its goal and left again in a later phase. Forward, the phases run in reverse. The port reproduces YASS's order exactly on every level both finish (86 of 86 XSokoban, 143 of 143 SokHard). YASS uses an order only when at least 9 goals form connected groups; elsewhere this search steps aside and the thread goes straight to backward search.</p>
+<p><strong>The search.</strong> A child's score is its pushes plus the lower bound, minus 32 per filled target, minus 2 per target the push approaches, plus 2·(1 + the pushed box's distance to the nearest open target). An approaching push is refunded one push later, so marching one box home lowers the score by at least one per push. A child no worse than its parent and the best open entry is expanded at once, depth first, inside the generation loop, so the search walks almost straight along the order. A box leaving a target of an earlier phase sets the phase back.</p>
+<p><strong>What the diff test found.</strong> Five details the first re-derivation missed: goals used for parking appear in two phases (dropping them stalled #69 exactly there); a box frozen on a later phase's goal costs half the lower bound; a strictly shorter path takes over a position not yet expanded; generation order (last pushed box first, then ascending or descending by push parity; up, left, down, right); and grown corrals, whose pushes keep the parent's score. Turning parts of YASS off showed what carries its search: room pruning nothing, corral pruning a lot, its deadlock-set database a lot (#11 needs 7k positions with it and 67k without). That database is not ported, so XSokoban #11, #28 and #31 remain out of reach.</p>
+<p>It solves XSokoban #50, #66 and #69 and Sasquatch #36, which no other thread solves at 10 s, all within about 2 seconds; with a 3 second slice no level was lost on any pack.</p>
+</div>
+<div class="pointers"><a href="https://github.com/rkirov/sokoban-ai/blob/f48eee90af0f8c6dcbfc347302ba0019d3afa229/src/yassorder.rs#L71" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><span class="where">src/yassorder.rs:71 compute</span></a><a href="https://github.com/rkirov/sokoban-ai/blob/f48eee90af0f8c6dcbfc347302ba0019d3afa229/src/posearch.rs#L135" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><span class="where">src/posearch.rs:135 score</span></a><a href="https://github.com/rkirov/sokoban-ai/blob/f48eee90af0f8c6dcbfc347302ba0019d3afa229/src/posearch.rs#L111" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><span class="where">src/posearch.rs:111 after_leaving</span></a><a href="https://github.com/rkirov/sokoban-ai/blob/f48eee90af0f8c6dcbfc347302ba0019d3afa229/src/posearch.rs#L284" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><span class="where">src/posearch.rs:284 expand</span></a><a href="https://github.com/rkirov/sokoban-ai/blob/f48eee90af0f8c6dcbfc347302ba0019d3afa229/src/main.rs#L91" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><span class="where">src/main.rs:91 po+macro</span></a></div>
 
 <h3 id="fess">FESS over macro moves</h3>
 <div class="prose">
@@ -496,12 +507,12 @@ flowchart LR
 <h2>Portfolio and safety</h2>
 <pre class="code"><span class="c">// src/main.rs:41</span>
 <span class="k">const</span> DEFAULT: [Strategy; 4] =
-    [Strategy::Optimal, Strategy::Fess, Strategy::Backward(0), Strategy::BackwardMacro];</pre>
+    [Strategy::Optimal, Strategy::Fess, Strategy::Backward(0), Strategy::PoThenMacro];</pre>
 <div class="twocol">
   <div class="card"><h4>Only solutions stop the race</h4><p>Solutions are verified by replay, but "unsolvable" verdicts cannot be. A verdict therefore ends only its own thread, so one unsound strategy cannot stop the others. If a solution appears after another thread claimed "unsolvable", the program prints a soundness warning. <span class="where">src/main.rs:94 solve_auto</span></p></div>
   <div class="card"><h4>Optimal when possible</h4><p>Earlier strategies win ties and forward A* is first. So a reported solution is push-optimal whenever A* finished within the budget.</p></div>
   <div class="card"><h4>Memory watchdog</h4><p>A background thread polls resident memory from <code>/proc/self/status</code>. At the limit (default half of RAM, or <code>--memory-limit</code>) it stops every search, which then reports a timeout instead of exhausting the machine. FESS also caps its queue at 20 million moves. <span class="where">src/main.rs:140</span></p></div>
-  <div class="card"><h4>Why these four</h4><p>Each strategy was measured for the levels only it solves, then head-to-head on every pack. The two greedy backward threads differ only in move shape, yet each solves levels the other cannot: single pulls dominate SokHard, macro pulls reach levels like XSokoban #14. They replaced an optimal and a weighted backward thread, gaining SokHard, Sasquatch, XSokoban and Microban levels.</p></div>
+  <div class="card"><h4>Why these four</h4><p>Each strategy was measured for the levels only it solves, then head-to-head on every pack. The two greedy backward threads differ only in move shape, yet each solves levels the other cannot: single pulls dominate SokHard, macro pulls reach levels like XSokoban #14. They replaced an optimal and a weighted backward thread, gaining SokHard, Sasquatch, XSokoban and Microban levels. The packing-order search shares the macro thread: alone as a fifth thread it cost SokHard 4–8 levels (four cores), while a 3 second slice keeps every level and adds four.</p></div>
 </div>
 </section>
 
@@ -551,7 +562,7 @@ flowchart LR
 </div>
 <figure class="chart" id="chartCal"></figure>
 <div class="twocol">
-  <div class="card"><h4>Large levels</h4><p>XSokoban (70/90) and Holland (62/81) are not limited by time. On most XSokoban misses FESS reaches a near-complete position that is already dead, and the fatal move happened many moves earlier, for example a box plugging the only door to the goal room. The rest stall early because the plan gives no sense of progress (diagonal goal rooms, parking plans). Festival-style learned deadlock patterns were built and measured, but their proofs did not succeed within a useful budget here.</p></div>
+  <div class="card"><h4>Large levels</h4><p>XSokoban (73/90) and Holland (62/81) are not limited by time. On most XSokoban misses FESS reaches a near-complete position that is already dead, and the fatal move happened many moves earlier, for example a box plugging the only door to the goal room. The rest stall early because the plan gives no sense of progress (diagonal goal rooms, parking plans). Festival-style learned deadlock patterns were built and measured, but their proofs did not succeed within a useful budget here.</p></div>
   <div class="card"><h4>Dense levels</h4><p>SokHard is limited only by time: every level is solved within 40 s, almost all by the greedy backward thread, so its speed converts directly into solves. Sasquatch runs into the memory cap after 25–50 s.</p></div>
   <div class="card"><h4>Reinforcement learning</h4><p>Only after the classical techniques are exhausted, and only as an advisor inside FESS, never as something that prunes.</p></div>
 </div>
@@ -789,11 +800,11 @@ flowchart LR
   // Results table.
   const SCORE = [
     ["Microban I–IV", 493, 490, "490", 477, null, null],
-    ["XSokoban", 90, 70, "70", null, 88, 85],
+    ["XSokoban", 90, 73, "73", null, 88, 85],
     ["SokEvo", 107, 107, "107", null, 107, 107],
     ["Grigr2001", 100, 93, "93", null, 96, 96],
     ["Holland", 81, 62, "62", null, 65, 68],
-    ["Sasquatch", 50, 33, "33", null, 41, 43],
+    ["Sasquatch", 50, 34, "34", null, 41, 43],
     ["SokHard", 163, 158, "158", 117, 134, 163]
   ];
   const st2 = document.getElementById("score");
@@ -843,7 +854,7 @@ flowchart LR
   // Alternatives left out.
   const LEFT_OUT = [
     ["FESS", "Lines of play that restart at every packing gain", "They multiply into thousands and dilute each other; first-move lines solve 3 more XSokoban levels"],
-    ["FESS", "Plan-guided greedy forward search, YASS-style scores (our order or YASS's own)", "0 of 6 XSokoban levels YASS solves instantly; YASS needs its packing-order phases with parking"],
+    ["FESS", "Plan-guided greedy forward search, YASS-style scores, re-derived from a written spec", "0 of 6 XSokoban levels YASS solves instantly; the diff test against YASS later found the five missing details (see Packing-order search)"],
     ["FESS", "Relaxed-plan progress on every level, not just those that park", "−1: a fixed sequence is more restrictive than the partial order"],
     ["FESS", "Plan removals only at start squares ≥ 3 or ≥ 6 steps from goals", "Within noise, also as a second FESS thread"],
     ["FESS", "Alternating cyclic cell visits with best-cell visits", "No change"],

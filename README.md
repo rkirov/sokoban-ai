@@ -25,6 +25,7 @@ cargo build --release
 ./target/release/sokoban-solver f.txt --memory-limit 2               # GB (default: half of RAM)
 ./target/release/sokoban-solver f.txt --solutions out.sok --quiet    # write LURD solutions
 ./target/release/sokoban-solver f.txt --show-plan                    # print packing plans (diagnostic)
+./target/release/sokoban-solver f.txt --yass-order                   # print YASS's packing order (x y phase parking home)
 ```
 
 Every solution is reconstructed into a LURD move string and replayed
@@ -36,9 +37,10 @@ against the original level text before it is reported.
 
 Four threads race with the full time budget each; the first *solution*
 stops the others. Default: push-optimal A\* (reported solutions are optimal
-whenever it finishes first), FESS, and greedy backward (pull) search
-twice — over single pulls and over macro pulls (one box pulled any
-distance) — because the two move shapes solve different levels. The portfolio was chosen by measuring each strategy's
+whenever it finishes first), FESS, greedy backward (pull) search over
+single pulls, and a fourth thread that runs the packing-order search for
+3 s and then greedy backward search over macro pulls (one box pulled any
+distance) — the two backward move shapes solve different levels. The portfolio was chosen by measuring each strategy's
 *unique* solves and then head-to-head on every pack (bidirectional search
 and staged weighted forward A\* were removed: they added no solves).
 
@@ -47,6 +49,31 @@ verified by replay, verdicts are not, so one unsound strategy cannot stop
 the rest. A solution found after another thread claimed "unsolvable" is
 reported as a soundness bug. A memory watchdog polls the process's resident
 memory and stops the searches (reported as a timeout) at the limit.
+
+### Packing-order search (`posearch.rs`, `yassorder.rs`)
+
+YASS's forward search, re-derived and diff-tested against an instrumented
+YASS build expansion by expansion. `yassorder.rs` computes YASS's packing
+order: put a box on every goal and peel them off backward, phase by phase,
+each to an unused start square, parking boxes that can only move in a small
+area on far squares (a parking square is a temporary target, filled before
+its goal and left again later). Its output matches YASS's exactly on every
+level both finish (XSokoban 86/86, SokHard 143/143). YASS only uses an order
+when at least 9 goals form connected groups; elsewhere the search steps
+aside.
+
+The search scores a child by the pushed box's own distance to the nearest
+open target of the current phase (weight 2), minus 2 per target the push
+approaches and 32 per filled target; an approaching push is refunded one
+push later, so marching a box home lowers the score every push. A child no
+worse than its parent and the best open entry is expanded at once, inside
+the generation loop. Leaving a target of an earlier phase sets the phase
+back. Details that mattered, each found by the diff test: targets used in
+two phases, a penalty for boxes frozen on a later phase's goal, shorter
+paths taking over unexpanded duplicates, YASS's generation order, and
+grown corrals whose pushes keep the parent's score. It solves XSokoban 50,
+66, 69 and Sasquatch 36 in about 2 s; given a 3 s slice it costs nothing
+elsewhere.
 
 ### Feature-space search over macro moves (`fess.rs`, `macros.rs`)
 
@@ -125,27 +152,32 @@ Per-level time limit 10 s, 4-core machine, full default portfolio.
 | Set | Levels | This solver | Same machine: YASS 2.153 | Published @10 s: Festival / Sokolution* |
 |-----|--------|-------------|--------------------------|------------------------------------------|
 | Microban I–IV | 493 | **490** | 477 | — |
-| XSokoban | 90 | **70** | — | 88 / 85 |
+| XSokoban | 90 | **73** | — | 88 / 85 |
 | SokEvo | 107 | **107** | — | 107 / 107 |
 | Grigr2001 | 100 | **93** | — | 96 / 96 |
 | Holland | 81 | **62** | — | 65 / 68 |
-| Sasquatch | 50 | **33** | — | 41 / 43 |
+| Sasquatch | 50 | **34** | — | 41 / 43 |
 | SokHard | 163 | **158** | 117 | 134 / 163 |
 
 \* From the sokobano.de solver statistics (Large Test Suite), measured on a
 Ryzen 9 7900X with 8+ threads — not directly comparable. YASS was built from
 source and run single-threaded on the same 4-core machine as this solver.
 
-Progress since September 2026 (same machine, 10 s): XSokoban 16 → 70,
+Progress since September 2026 (same machine, 10 s): XSokoban 16 → 73,
 Microban 480 → 490, SokHard 61 → 158 (runs vary by a few levels on
-this shared machine), Sasquatch 26 → 33, Holland 57 → 62. On SokHard this is ahead of YASS
+this shared machine), Sasquatch 26 → 34, Holland 57 → 62. On SokHard this is ahead of YASS
 (117 on the same machine), Festival (134) and Takaken (139) as published
 on a faster machine; only Sokolution (163) solves more.
 
 ## Open problems and next steps
 
-- **Large levels** (XSokoban 67/90, Holland 61/81): not time-bound — a 60 s
-  run solves only 4 of XSokoban's 23 misses. FESS's best positions on the
+- **YASS's deadlock sets** (XSokoban 11, 28, 31): with YASS's order the
+  packing-order search still trails YASS there; disabling YASS's
+  deadlock-set tests reproduces the gap (#11: 7k → 67k positions), so the
+  next lever is its precomputed capacity sets and the sets it learns from
+  corrals during search.
+- **Large levels** (XSokoban 73/90, Holland 62/81): not time-bound — a 60 s
+  run solved only 4 of XSokoban's then 23 misses. FESS's best positions on the
   misses are provably dead (all but 2–4 boxes packed in a way that cannot
   be completed), so the lever is recognising those dead ends early:
   deadlock patterns learned from stalled positions (proofs currently cost
