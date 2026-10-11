@@ -103,6 +103,11 @@ that plan instead.
   prunes the backward searches. Checked against exhaustive search and
   against real solutions in both directions.
 - *PI-corrals and corral mini-search* (`corral.rs`).
+- *Grown corrals* (`growcorral.rs`, re-derived from YASS): when no corral
+  passes the PI test, grow one — merge the unreachable areas its pushes
+  need and let movable boxes that block the player's pushing square join —
+  and generate only its pushes. Optimal push counts unchanged on Microban;
+  SokHard 153–154 → 158.
 - *Gate pushes* (`level.rs`): after a box is pushed onto a non-goal square
   that (with walls alone) cuts the pushing side off from the box's other
   sides, only the forward push of that box is generated.
@@ -125,14 +130,14 @@ Per-level time limit 10 s, 4-core machine, full default portfolio.
 | Grigr2001 | 100 | **93** | — | 96 / 96 |
 | Holland | 81 | **62** | — | 65 / 68 |
 | Sasquatch | 50 | **33** | — | 41 / 43 |
-| SokHard | 163 | **156–157** | 117 | 134 / 163 |
+| SokHard | 163 | **158** | 117 | 134 / 163 |
 
 \* From the sokobano.de solver statistics (Large Test Suite), measured on a
 Ryzen 9 7900X with 8+ threads — not directly comparable. YASS was built from
 source and run single-threaded on the same 4-core machine as this solver.
 
 Progress since September 2026 (same machine, 10 s): XSokoban 16 → 70,
-Microban 480 → 490, SokHard 61 → 156–157 (runs vary by a few levels on
+Microban 480 → 490, SokHard 61 → 158 (runs vary by a few levels on
 this shared machine), Sasquatch 26 → 33, Holland 57 → 62. On SokHard this is ahead of YASS
 (117 on the same machine), Festival (134) and Takaken (139) as published
 on a faster machine; only Sokolution (163) solves more.

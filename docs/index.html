@@ -183,7 +183,7 @@ pre.mermaid { background: var(--surface); border: 1px solid var(--rule); border-
 <header class="hero">
   <div class="eyebrow">sokoban-ai · how the solver works</div>
   <h1>Sokoban Solver Field Notes</h1>
-  <p class="lede">A reference for the Rust solver in <a href="https://github.com/rkirov/sokoban-ai">rkirov/sokoban-ai</a>: what each part does, why it is there, how it stays correct, and where it lives in the code. At 10 seconds per level it solves 490 of 493 Microban levels and 156–157 of 163 SokHard levels, more than YASS, Festival and Takaken report on that pack. Given 40 seconds it solves all of SokHard.</p>
+  <p class="lede">A reference for the Rust solver in <a href="https://github.com/rkirov/sokoban-ai">rkirov/sokoban-ai</a>: what each part does, why it is there, how it stays correct, and where it lives in the code. At 10 seconds per level it solves 490 of 493 Microban levels and 158 of 163 SokHard levels, more than YASS, Festival and Takaken report on that pack. Given 40 seconds it solves all of SokHard.</p>
   <div class="meta">
     <span>~5,700 lines of Rust in <code>src/</code></span>
     <span>36 tests</span>
@@ -376,6 +376,7 @@ flowchart LR
 <tr><td>Dead sets (k = 2, 3)</td><td>These k boxes alone, with the player in this region, cannot be finished</td><td>All (backward uses the mirror table)</td><td><code>deadsets.rs:69</code></td></tr>
 <tr><td>PI-corrals</td><td>Only the pushes into a fenced area need to be tried now</td><td>A*, FESS</td><td><code>corral.rs:96</code></td></tr>
 <tr><td>Corral mini-search</td><td>A fenced area can never be resolved</td><td>A*, FESS</td><td><code>corral.rs:315</code></td></tr>
+<tr><td>Grown corrals</td><td>No PI-corral, but one grown from an unreachable area qualifies</td><td>A*</td><td><a href="https://github.com/rkirov/sokoban-ai/blob/0bf923331ad367d9dc4a2f9f89b759472388b7a4/src/growcorral.rs#L41" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><code>growcorral.rs:41</code></a></td></tr>
 </tbody>
 </table>
 </div>
@@ -402,6 +403,8 @@ flowchart LR
 <p>A <em>corral</em> is an area the player cannot reach, fenced by walls and boxes. Suppose that, with every box outside the corral removed, each possible push of a fence box goes into the corral and could be made right now. Then any solution can be reordered so that such a push comes first. If the corral is unfinished (a fence box off its goal, or an empty goal inside when every goal must be filled), the search only needs to try those pushes at this node. This keeps push-optimality.</p>
 <p>An unfinished corral with <em>no</em> possible push can never change, so the position is dead. Corrals that fail the conditions get a capped mini-search on the reduced board (at most 10 boxes, 400 states). It aborts with "not proven" if the fence opens, a box leaves the corral's area, or an outside box could be pushed in. Otherwise, exhausting every state without resolving the corral proves a deadlock. Verdicts are cached per corral, keyed by its region, because one fence can enclose several regions with different verdicts.</p>
 <div class="pointers"><span class="where">src/corral.rs:96 analyze</span><span class="where">src/corral.rs:200 qualify</span><span class="where">src/corral.rs:315 mini_deadlock_search</span><span class="where">src/tests.rs:267</span></div>
+<p><strong>Grown corrals.</strong> When no corral passes, the A* search grows one instead of giving up (re-derived from YASS). Starting from an unreachable area next to a box the player can reach, each push of a corral box is checked. If the player's square for it is another unreachable area, or the push goes into one, that area is merged: the conditions above do not need the corral to be connected. If an outside box stands on the player's square, it joins the corral when it can step aside (its neighbours across the push are free), so its pushes are tried too; if it cannot, the push is impossible and ignored, as is a push that would freeze the box among corral boxes. Only a push from a reachable square onto reachable floor rejects the corral. Optimal push counts stay the same on all of Microban, and SokHard goes from 153–154 to 158 solved.</p>
+<div class="pointers"><a href="https://github.com/rkirov/sokoban-ai/blob/0bf923331ad367d9dc4a2f9f89b759472388b7a4/src/growcorral.rs#L41" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><span class="where">src/growcorral.rs:41 analyze</span></a><a href="https://github.com/rkirov/sokoban-ai/blob/0bf923331ad367d9dc4a2f9f89b759472388b7a4/src/growcorral.rs#L68" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><span class="where">src/growcorral.rs:68 grow</span></a><a href="https://github.com/rkirov/sokoban-ai/blob/0bf923331ad367d9dc4a2f9f89b759472388b7a4/src/solver.rs#L326" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><span class="where">src/solver.rs:326</span></a></div>
 </div>
 <figure>
   <div class="board-wrap"><div class="board" id="corralBoard"></div></div>
@@ -791,7 +794,7 @@ flowchart LR
     ["Grigr2001", 100, 93, "93", null, 96, 96],
     ["Holland", 81, 62, "62", null, 65, 68],
     ["Sasquatch", 50, 33, "33", null, 41, 43],
-    ["SokHard", 163, 157, "156–157", 117, 134, 163]
+    ["SokHard", 163, 158, "158", 117, 134, 163]
   ];
   const st2 = document.getElementById("score");
   st2.innerHTML = "<thead><tr><th>Pack</th><th class='num'>Levels</th><th class='num'>This solver</th><th class='num'>YASS</th><th class='num'>Festival / Sokolution</th><th>Solved fraction</th></tr></thead>";
