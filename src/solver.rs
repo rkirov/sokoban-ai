@@ -324,7 +324,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
                 CorralResult::NoPruning => {
                     let reach: Vec<bool> = (0..board.num_squares).map(|q| reach_stamp[q] == reach_gen).collect();
                     match grow.analyze(board, &box_at, &reach, &mut freeze, equal_goals_boxes) {
-                        Some(pushes) => Candidates::Restricted(pushes),
+                        Some(c) => Candidates::Restricted(c.pushes),
                         None => Candidates::All,
                     }
                 }

@@ -8,11 +8,13 @@ mod level;
 mod macros;
 mod matching;
 mod packing;
+mod posearch;
 mod retro;
 mod solver;
 #[cfg(test)]
 mod tests;
 mod verify;
+mod yassorder;
 
 use level::Board;
 use solver::{Mode, Options, Outcome};
@@ -34,13 +36,18 @@ enum Strategy {
     Backward(u32),
     /// Greedy backward search over macro pulls (one box, any distance).
     BackwardMacro,
+    /// Packing-order search (YASS's order and search, posearch.rs).
+    PoSearch,
+    /// The packing-order search for at most 3 s, then backward-macro: it
+    /// either walks to a solution quickly or not at all.
+    PoThenMacro,
     /// Feature-space search over macro moves.
     Fess,
 }
 
 impl Strategy {
     const DEFAULT: [Strategy; 4] =
-        [Strategy::Optimal, Strategy::Fess, Strategy::Backward(0), Strategy::BackwardMacro];
+        [Strategy::Optimal, Strategy::Fess, Strategy::Backward(0), Strategy::PoThenMacro];
 
     fn parse(name: &str) -> Option<Self> {
         Some(match name {
@@ -50,6 +57,8 @@ impl Strategy {
             "fess" => Strategy::Fess,
             "backward-greedy" => Strategy::Backward(0),
             "backward-macro" => Strategy::BackwardMacro,
+            "po-search" => Strategy::PoSearch,
+            "po+macro" => Strategy::PoThenMacro,
             _ => return None,
         })
     }
@@ -59,6 +68,8 @@ impl Strategy {
             Strategy::Optimal => "fwd-optimal",
             Strategy::Backward(0) => "backward-greedy",
             Strategy::BackwardMacro => "backward-macro",
+            Strategy::PoSearch => "po-search",
+            Strategy::PoThenMacro => "po+macro",
             Strategy::Backward(1) => "backward",
             Strategy::Backward(_) => "backward-weighted",
             Strategy::Fess => "fess",
@@ -76,6 +87,17 @@ impl Strategy {
                 solver::solve_backward(board, &Options { mode, ..opts.clone() })
             }
             Strategy::Fess => fess::solve(board, opts),
+            Strategy::PoSearch => posearch::solve(board, opts),
+            Strategy::PoThenMacro => {
+                let start = std::time::Instant::now();
+                let slice = opts.time_limit.min(std::time::Duration::from_secs(3));
+                let first = posearch::solve(board, &Options { time_limit: slice, ..opts.clone() });
+                if matches!(first, Outcome::Solved { .. }) || opts.stopped() {
+                    return first;
+                }
+                let rest = opts.time_limit.saturating_sub(start.elapsed());
+                Strategy::BackwardMacro.run(board, &Options { time_limit: rest, ..opts.clone() })
+            }
         }
     }
 }
@@ -237,7 +259,7 @@ fn main() {
              \x20 [--portfolio optimal,backward,backward:W,backward-greedy,backward-macro,fess]   (default: optimal,fess,backward-greedy,backward-macro)\n\
              \x20 [--mode auto|optimal|greedy|weighted:W|backward|fess]\n\
              \x20 [--memory-limit GB]   (default: half of RAM)  [--max-nodes N] [--no-corral]\n\
-             \x20 [--solutions FILE] [--quiet] [--show-plan]"
+             \x20 [--solutions FILE] [--quiet] [--show-plan] [--yass-order]"
         );
         std::process::exit(2);
     }
@@ -251,6 +273,7 @@ fn main() {
     let mut backward = false;
     let mut fess_mode = false;
     let mut show_plan = false;
+    let mut yass_order = false;
     let mut portfolio: Vec<Strategy> = Strategy::DEFAULT.to_vec();
     let mut memory_limit = default_memory_limit();
 
@@ -299,6 +322,8 @@ fn main() {
                 memory_limit = (gb * 1e9) as u64;
             }
             "--show-plan" => show_plan = true,
+            // Print YASS's packing order (yassorder.rs) as "x y phase parking home".
+            "--yass-order" => yass_order = true,
             "--portfolio" => {
                 let list = it.next().expect("--portfolio a,b,...");
                 portfolio = list
@@ -343,6 +368,14 @@ fn main() {
         };
         if show_plan {
             print_plan(&board);
+            continue;
+        }
+        if yass_order {
+            let order = yassorder::compute(&board, opts.time_limit);
+            println!("; level {n} ({}): {} entries", lvl.name, order.as_ref().map_or(0, |o| o.len()));
+            if let Some(o) = order {
+                print!("{}", yassorder::format(&board, &o));
+            }
             continue;
         }
         opts.stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
