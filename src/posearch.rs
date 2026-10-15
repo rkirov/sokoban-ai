@@ -18,9 +18,9 @@
 
 use crate::deadlock::FreezeChecker;
 use crate::deadsets::{DeadSetTables, Direction};
-use crate::growcorral::GrowCorral;
 use crate::level::{Board, INF, NONE, OPP};
 use crate::solver::{Options, Outcome, Stats};
+use crate::yasscorral::YassCorral;
 use crate::yassorder::OrderEntry;
 use rustc_hash::FxHashMap;
 use std::collections::VecDeque;
@@ -31,6 +31,10 @@ const PER_TARGET: i64 = 32;
 const OFFSET: i64 = 255 * PER_TARGET;
 const NO_PARENT: u32 = u32::MAX;
 const MAX_DIVE: usize = 4000;
+/// Learned dead corrals: at most this many boxes, proved within this many
+/// positions.
+const LEARN_BOXES: usize = 5;
+const PROOF_STATES: usize = 500;
 
 /// One target of the order: a square filled in a phase. A square can be a
 /// target of two phases (a goal used for parking and filled again later).
@@ -194,6 +198,8 @@ struct Node {
     /// Some box may be frozen on a later phase's goal.
     frozen_early: bool,
     expanded: bool,
+    /// On the open list (entries of rescored nodes go stale).
+    queued: bool,
     parent: u32,
     from: u16,
     dir: u8,
@@ -208,14 +214,20 @@ struct Search<'a> {
     /// Open list: buckets by score, last in first out.
     buckets: Vec<Vec<u32>>,
     open_min: usize,
-    open_len: usize,
-    last_bucket: usize,
+    /// live[s]: queued nodes with score s (buckets may hold stale entries).
+    live: Vec<u32>,
     rover: usize,
     /// Pushes generated so far; the rover fires on multiples of 8.
     generated: u64,
     freeze: FreezeChecker,
     dead_sets: DeadSetTables,
-    corral: GrowCorral,
+    corral: YassCorral,
+    /// Dead corrals learned so far, as (boxes, the player's region with
+    /// only those boxes on the board, a square inside the corral), indexed
+    /// by box square; and the proofs tried, by (boxes, player region).
+    patterns: Vec<(Box<[u16]>, u16, u16)>,
+    patterns_at: Vec<Vec<u32>>,
+    proved: FxHashMap<(Box<[u16]>, u16), bool>,
     start: Instant,
     opts: &'a Options,
     solved: Option<u32>,
@@ -226,15 +238,27 @@ impl<'a> Search<'a> {
         let s = score as usize;
         if self.buckets.len() <= s {
             self.buckets.resize_with(s + 1, Vec::new);
+            self.live.resize(s + 1, 0);
         }
         self.buckets[s].push(idx);
+        self.live[s] += 1;
+        self.nodes[idx as usize].queued = true;
         self.open_min = self.open_min.min(s);
-        self.open_len += 1;
+    }
+
+    /// Take a queued node off the open list (its entry goes stale).
+    fn unqueue(&mut self, idx: u32) {
+        let n = &mut self.nodes[idx as usize];
+        if n.queued {
+            n.queued = false;
+            self.live[n.score as usize] -= 1;
+        }
     }
 
     /// The best score on the open list (usize::MAX if empty).
     fn open_min(&mut self) -> usize {
-        while self.open_min < self.buckets.len() && self.buckets[self.open_min].is_empty() {
+        while self.open_min < self.buckets.len() && self.live[self.open_min] == 0 {
+            self.buckets[self.open_min].clear();
             self.open_min += 1;
         }
         if self.open_min >= self.buckets.len() {
@@ -244,35 +268,29 @@ impl<'a> Search<'a> {
     }
 
     fn pop_open(&mut self) -> Option<u32> {
-        loop {
-            let idx = self.pop_entry()?;
-            // Skip stale entries: expanded meanwhile, or rescored by a
-            // shorter path.
-            let n = &self.nodes[idx as usize];
-            if !n.expanded && n.score as usize == self.last_bucket {
-                return Some(idx);
-            }
-        }
-    }
-
-    fn pop_entry(&mut self) -> Option<u32> {
-        if self.open_len == 0 {
+        let mut b = self.open_min();
+        if b == usize::MAX {
             return None;
         }
-        let mut b = self.open_min();
         // Now and then take the next non-empty bucket above the last such
         // pick instead of the best (escapes a futile line), wrapping around.
         if self.generated % 8 == 0 {
             let mut r = self.rover + 1;
-            while r < self.buckets.len() && self.buckets[r].is_empty() {
+            while r < self.buckets.len() && self.live[r] == 0 {
                 r += 1;
             }
             self.rover = if r < self.buckets.len() { r } else { b };
             b = self.rover;
         }
-        self.open_len -= 1;
-        self.last_bucket = b;
-        self.buckets[b].pop()
+        // Last in, first out; skip stale entries.
+        while let Some(idx) = self.buckets[b].pop() {
+            let n = &self.nodes[idx as usize];
+            if n.queued && n.score as usize == b {
+                self.unqueue(idx);
+                return Some(idx);
+            }
+        }
+        unreachable!("a bucket with live entries ran empty")
     }
 
     fn out_of_time(&self) -> bool {
@@ -297,12 +315,17 @@ impl<'a> Search<'a> {
         }
         let (reach, _) = flood(board, &box_at, player);
 
-        // Corral pruning: only the corral's pushes. A push that works on a
-        // corral keeps this node's score, so opening the corral is tried
-        // before it is rejected (unless the corral holds every box).
-        let eq = board.goals.len() == board.start_boxes.len();
-        let corral = self.corral.analyze(board, &box_at, &reach, &mut self.freeze, eq);
-        let inherit = idx != 0 && corral.as_ref().is_some_and(|c| c.boxes < boxes.len());
+        if self.learn_dead_corral(&box_at, &reach, player) {
+            return;
+        }
+        // After a gate or tunnel push only the pushed box moves next, and
+        // corrals are not examined. Otherwise corral pruning: only the
+        // corral's pushes. A push that works on a corral keeps this node's
+        // score, so opening the corral is tried before it is rejected.
+        let n = &self.nodes[idx as usize];
+        let gate = n.parent != NO_PARENT && (board.forced[n.from as usize][n.dir as usize] || tunnel(board, n.from, n.dir as usize));
+        let corral = if gate { None } else { self.corral.analyze(board, &box_at, &reach, &mut self.freeze, &boxes) };
+        let inherit = idx != 0 && corral.is_some();
 
         // The last pushed box first, then the others ascending after an odd
         // number of pushes and descending after an even one; directions up,
@@ -318,8 +341,11 @@ impl<'a> Search<'a> {
         let slb0: u32 = boxes.iter().map(|&b| board.min_goal_dist[b as usize]).sum();
         for bi in order {
             let b = boxes[bi];
+            if gate && Some(b) != last {
+                continue;
+            }
             for d in [0usize, 2, 1, 3] {
-                if corral.as_ref().is_some_and(|c| !c.pushes.contains(&(b, d as u8))) {
+                if corral.as_ref().is_some_and(|c| !c.contains(&(b, d as u8))) {
                     continue;
                 }
                 let to = board.neighbors[b as usize][d];
@@ -370,9 +396,13 @@ impl<'a> Search<'a> {
         if unmatched {
             return;
         }
+        let (creach, cnorm) = flood(board, box_at, from);
+        if self.matches_pattern(to, box_at, &creach, from) {
+            return;
+        }
         let mut sorted = child.clone();
         sorted.sort_unstable();
-        let key = (sorted.into_boxed_slice(), flood(board, box_at, from).1);
+        let key = (sorted.into_boxed_slice(), cnorm);
         // A known position is taken over by a strictly shorter path while it
         // is not expanded yet.
         let known = self.tt.get(&key).copied();
@@ -404,6 +434,7 @@ impl<'a> Search<'a> {
             score: cscore,
             frozen_early: cfrozen,
             expanded: false,
+            queued: false,
             parent: idx,
             from,
             dir: d as u8,
@@ -411,6 +442,7 @@ impl<'a> Search<'a> {
         let solved = node.boxes.iter().all(|&s| board.is_goal[s as usize]);
         let cidx = match known {
             Some(k) => {
+                self.unqueue(k);
                 self.nodes[k as usize] = node;
                 k
             }
@@ -432,6 +464,177 @@ impl<'a> Search<'a> {
             self.push_open(cidx, cscore);
         }
     }
+}
+
+impl Search<'_> {
+    /// Look for a corral whose boxes alone can never all reach goals; if
+    /// one is found, keep it as a pattern and report the node dead.
+    fn learn_dead_corral(&mut self, box_at: &[bool], reach: &[bool], player: u16) -> bool {
+        let board = self.board;
+        let n = board.num_squares;
+        let mut seen = vec![false; n];
+        for seed in 0..n {
+            if seen[seed] || box_at[seed] || reach[seed] {
+                continue;
+            }
+            // An unreachable area and the boxes fencing it.
+            let mut area = vec![false; n];
+            let mut fence: Vec<u16> = Vec::new();
+            let mut stack = vec![seed as u16];
+            seen[seed] = true;
+            area[seed] = true;
+            let mut inside = seed as u16;
+            while let Some(q) = stack.pop() {
+                inside = inside.min(q);
+                for &m in &board.neighbors[q as usize] {
+                    if m == NONE || area[m as usize] {
+                        continue;
+                    }
+                    area[m as usize] = true;
+                    if box_at[m as usize] {
+                        fence.push(m);
+                    } else {
+                        seen[m as usize] = true;
+                        stack.push(m);
+                    }
+                }
+            }
+            if fence.is_empty() || fence.len() > LEARN_BOXES || fence.iter().all(|&b| board.is_goal[b as usize]) {
+                continue;
+            }
+            fence.sort_unstable();
+            let mut only = vec![false; n];
+            for &b in &fence {
+                only[b as usize] = true;
+            }
+            let norm = flood(board, &only, player).1;
+            let key = (fence.clone().into_boxed_slice(), norm);
+            let dead = match self.proved.get(&key) {
+                Some(&v) => v,
+                None => {
+                    let v = never_all_home(board, &fence, player, &area, PROOF_STATES);
+                    self.proved.insert(key, v);
+                    v
+                }
+            };
+            if dead {
+                let id = self.patterns.len() as u32;
+                for &b in &fence {
+                    self.patterns_at[b as usize].push(id);
+                }
+                self.patterns.push((fence.into_boxed_slice(), norm, inside));
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Does a learned dead corral appear around the box just pushed to
+    /// `to`? Its boxes must all be present, the player shut out of it, and
+    /// the player's region, counting only the pattern's boxes, the one the
+    /// proof started from.
+    fn matches_pattern(&self, to: u16, box_at: &[bool], reach: &[bool], player: u16) -> bool {
+        self.patterns_at[to as usize].iter().any(|&id| {
+            let (boxes, norm, inside) = &self.patterns[id as usize];
+            boxes.iter().all(|&b| box_at[b as usize])
+                && !reach[*inside as usize]
+                && !box_at[*inside as usize]
+                && {
+                    let mut only = vec![false; self.board.num_squares];
+                    for &b in boxes.iter() {
+                        only[b as usize] = true;
+                    }
+                    flood(self.board, &only, player).1 == *norm
+                }
+        })
+    }
+}
+
+/// Can `boxes` alone (no other box on the board), with the player starting
+/// at `player`, never all stand on goals at once? A box pushed out of
+/// `area` (the corral and its fence) escapes and is dropped — optimistic,
+/// so a "yes" (true) is a proof. Removing boxes never makes a position
+/// harder, so the boxes stay dead in any position that holds them with the
+/// player in the same region. False also when the budget runs out.
+fn never_all_home(board: &Board, boxes: &[u16], player: u16, area: &[bool], budget: usize) -> bool {
+    let n = board.num_squares;
+    let mut at = vec![false; n];
+    let mut seen: rustc_hash::FxHashSet<(Vec<u16>, u16)> = rustc_hash::FxHashSet::default();
+    let mut stack: Vec<(Vec<u16>, u16)> = Vec::new();
+    let start = (boxes.to_vec(), {
+        for &b in boxes {
+            at[b as usize] = true;
+        }
+        let r = flood(board, &at, player).1;
+        for &b in boxes {
+            at[b as usize] = false;
+        }
+        r
+    });
+    seen.insert(start.clone());
+    stack.push(start);
+    while let Some((bx, pl)) = stack.pop() {
+        if bx.iter().all(|&b| board.is_goal[b as usize]) {
+            return false;
+        }
+        if seen.len() > budget {
+            return false;
+        }
+        for &b in &bx {
+            at[b as usize] = true;
+        }
+        let (reach, _) = flood(board, &at, pl);
+        for (i, &b) in bx.iter().enumerate() {
+            for d in 0..4 {
+                let to = board.neighbors[b as usize][d];
+                let behind = board.neighbors[b as usize][OPP[d]];
+                if to == NONE || behind == NONE || at[to as usize] || board.dead[to as usize] || !reach[behind as usize] {
+                    continue;
+                }
+                let mut nb = bx.clone();
+                if area[to as usize] {
+                    nb[i] = to;
+                } else {
+                    nb.remove(i);
+                }
+                if nb.is_empty() {
+                    return false;
+                }
+                nb.sort_unstable();
+                at[b as usize] = false;
+                for &x in &nb {
+                    at[x as usize] = true;
+                }
+                let norm = flood(board, &at, b).1;
+                for &x in &nb {
+                    at[x as usize] = false;
+                }
+                for &x in &bx {
+                    at[x as usize] = true;
+                }
+                if seen.insert((nb.clone(), norm)) {
+                    stack.push((nb, norm));
+                }
+            }
+        }
+        for &b in &bx {
+            at[b as usize] = false;
+        }
+    }
+    true
+}
+
+/// A tunnel push (YASS): the box left a square walled on both sides across
+/// the push for a non-goal square where it cannot move across either. It
+/// may as well keep going, so no other box needs to move first.
+fn tunnel(board: &Board, from: u16, d: usize) -> bool {
+    let to = board.neighbors[from as usize][d];
+    let across = if d < 2 { [2, 3] } else { [0, 1] };
+    let wall = |q: u16, e: usize| board.neighbors[q as usize][e] == NONE;
+    let dead = |q: u16, e: usize| board.dead[board.neighbors[q as usize][e] as usize];
+    !board.is_goal[to as usize]
+        && across.iter().all(|&e| wall(from, e))
+        && (across.iter().any(|&e| wall(to, e)) || across.iter().all(|&e| dead(to, e)))
 }
 
 /// Player region from `start`: (reachable flags, smallest square).
@@ -531,13 +734,15 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
         tt: FxHashMap::default(),
         buckets: Vec::new(),
         open_min: usize::MAX,
-        open_len: 0,
-        last_bucket: 0,
+        live: Vec::new(),
         rover: 0,
         generated: 0,
         freeze: FreezeChecker::new(board),
         dead_sets: DeadSetTables::new(board, Direction::Forward),
-        corral: GrowCorral::new(board),
+        corral: YassCorral::new(board),
+        patterns: Vec::new(),
+        patterns_at: vec![Vec::new(); board.num_squares],
+        proved: FxHashMap::default(),
         start,
         opts,
         solved: None,
@@ -556,6 +761,7 @@ pub fn solve(board: &Board, opts: &Options) -> Outcome {
         score: board.start_boxes.iter().map(|&b| board.min_goal_dist[b as usize] as i64).sum(),
         frozen_early: false,
         expanded: false,
+        queued: false,
         parent: NO_PARENT,
         from: 0,
         dir: 0,

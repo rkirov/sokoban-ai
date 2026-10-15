@@ -15,6 +15,7 @@ mod solver;
 mod tests;
 mod verify;
 mod yassorder;
+mod yasscorral;
 
 use level::Board;
 use solver::{Mode, Options, Outcome};
@@ -38,7 +39,7 @@ enum Strategy {
     BackwardMacro,
     /// Packing-order search (YASS's order and search, posearch.rs).
     PoSearch,
-    /// The packing-order search for at most 3 s, then backward-macro: it
+    /// The packing-order search for at most 5 s, then backward-macro: it
     /// either walks to a solution quickly or not at all.
     PoThenMacro,
     /// Feature-space search over macro moves.
@@ -90,7 +91,7 @@ impl Strategy {
             Strategy::PoSearch => posearch::solve(board, opts),
             Strategy::PoThenMacro => {
                 let start = std::time::Instant::now();
-                let slice = opts.time_limit.min(std::time::Duration::from_secs(3));
+                let slice = opts.time_limit.min(std::time::Duration::from_secs(5));
                 let first = posearch::solve(board, &Options { time_limit: slice, ..opts.clone() });
                 if matches!(first, Outcome::Solved { .. }) || opts.stopped() {
                     return first;

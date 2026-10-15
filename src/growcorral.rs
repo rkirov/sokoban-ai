@@ -21,13 +21,6 @@
 use crate::deadlock::FreezeChecker;
 use crate::level::{Board, NONE, OPP};
 
-pub struct Corral {
-    /// The (box, direction) pushes to generate.
-    pub pushes: Vec<(u16, u8)>,
-    /// Number of boxes in the corral.
-    pub boxes: usize,
-}
-
 pub struct GrowCorral {
     area: Vec<u32>,
     in_corral: Vec<u32>,
@@ -52,7 +45,7 @@ impl GrowCorral {
         reach: &[bool],
         freeze: &mut FreezeChecker,
         equal_goals_boxes: bool,
-    ) -> Option<Corral> {
+    ) -> Option<Vec<(u16, u8)>> {
         self.seen_stamp += 1;
         for seed in 0..board.num_squares as u16 {
             if box_at[seed as usize] || reach[seed as usize] || self.seen[seed as usize] == self.seen_stamp {
@@ -80,7 +73,7 @@ impl GrowCorral {
         freeze: &mut FreezeChecker,
         equal_goals_boxes: bool,
         seed: u16,
-    ) -> Option<Corral> {
+    ) -> Option<Vec<(u16, u8)>> {
         self.stamp += 1;
         let st = self.stamp;
         let mut squares: Vec<u16> = Vec::new();
@@ -140,7 +133,7 @@ impl GrowCorral {
                 }
             }
         }
-        (!pushes.is_empty()).then_some(Corral { pushes, boxes: boxes.len() })
+        (!pushes.is_empty()).then_some(pushes)
     }
 
     /// Flood the unreachable area from `start` into the corral; boxes
