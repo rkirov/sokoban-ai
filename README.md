@@ -39,7 +39,7 @@ Four threads race with the full time budget each; the first *solution*
 stops the others. Default: push-optimal A\* (reported solutions are optimal
 whenever it finishes first), FESS, greedy backward (pull) search over
 single pulls, and a fourth thread that runs the packing-order search for
-3 s and then greedy backward search over macro pulls (one box pulled any
+5 s and then greedy backward search over macro pulls (one box pulled any
 distance) — the two backward move shapes solve different levels. The portfolio was chosen by measuring each strategy's
 *unique* solves and then head-to-head on every pack (bidirectional search
 and staged weighted forward A\* were removed: they added no solves).
@@ -70,10 +70,23 @@ worse than its parent and the best open entry is expanded at once, inside
 the generation loop. Leaving a target of an earlier phase sets the phase
 back. Details that mattered, each found by the diff test: targets used in
 two phases, a penalty for boxes frozen on a later phase's goal, shorter
-paths taking over unexpanded duplicates, YASS's generation order, and
-grown corrals whose pushes keep the parent's score. It solves XSokoban 50,
-66, 69 and Sasquatch 36 in about 2 s; given a 3 s slice it costs nothing
-elsewhere.
+paths taking over unexpanded duplicates, YASS's generation order, YASS's
+recursive corral pruning (`yasscorral.rs`: an unreachable area reached by a
+push is examined as a corral of its own, adopted if it stands alone,
+combined otherwise; corral pushes keep the parent's score), and tunnel
+pushes (after a box enters a one-wide passage only it moves next).
+
+It also learns dead corrals: if a corral's boxes alone, with every other
+box removed, can never all stand on goals (a box leaving the corral counts
+as escaped — an optimistic relaxation, so a "no" is a proof), they are kept
+as a pattern and every later push that completes the pattern with the
+player shut out is cut. Removing boxes never makes a position harder, so
+the pattern holds in any position. This is YASS's dynamic deadlock-set idea;
+ablating YASS showed its learned and precalculated sets matter on different
+levels (#28 needs both, #31 the learned ones, #11 the precalculated ones).
+
+It solves XSokoban 50, 66, 69, 85 and Sasquatch 36 within 5 s; given a 5 s
+slice it costs nothing elsewhere.
 
 ### Feature-space search over macro moves (`fess.rs`, `macros.rs`)
 
@@ -152,7 +165,7 @@ Per-level time limit 10 s, 4-core machine, full default portfolio.
 | Set | Levels | This solver | Same machine: YASS 2.153 | Published @10 s: Festival / Sokolution* |
 |-----|--------|-------------|--------------------------|------------------------------------------|
 | Microban I–IV | 493 | **490** | 477 | — |
-| XSokoban | 90 | **73** | — | 88 / 85 |
+| XSokoban | 90 | **74** | — | 88 / 85 |
 | SokEvo | 107 | **107** | — | 107 / 107 |
 | Grigr2001 | 100 | **93** | — | 96 / 96 |
 | Holland | 81 | **62** | — | 65 / 68 |
@@ -163,7 +176,7 @@ Per-level time limit 10 s, 4-core machine, full default portfolio.
 Ryzen 9 7900X with 8+ threads — not directly comparable. YASS was built from
 source and run single-threaded on the same 4-core machine as this solver.
 
-Progress since September 2026 (same machine, 10 s): XSokoban 16 → 73,
+Progress since September 2026 (same machine, 10 s): XSokoban 16 → 74,
 Microban 480 → 490, SokHard 61 → 158 (runs vary by a few levels on
 this shared machine), Sasquatch 26 → 34, Holland 57 → 62. On SokHard this is ahead of YASS
 (117 on the same machine), Festival (134) and Takaken (139) as published
@@ -171,12 +184,11 @@ on a faster machine; only Sokolution (163) solves more.
 
 ## Open problems and next steps
 
-- **YASS's deadlock sets** (XSokoban 11, 28, 31): with YASS's order the
-  packing-order search still trails YASS there; disabling YASS's
-  deadlock-set tests reproduces the gap (#11: 7k → 67k positions), so the
-  next lever is its precomputed capacity sets and the sets it learns from
-  corrals during search.
-- **Large levels** (XSokoban 73/90, Holland 62/81): not time-bound — a 60 s
+- **YASS's precalculated deadlock sets** (XSokoban 11, 28, 31): learned
+  dead corrals are in, but YASS also precomputes ~500 capacity sets per
+  level ("at most k more boxes in these squares", many requiring the player
+  outside); without them YASS needs 2.5× the positions on #11.
+- **Large levels** (XSokoban 74/90, Holland 62/81): not time-bound — a 60 s
   run solved only 4 of XSokoban's then 23 misses. FESS's best positions on the
   misses are provably dead (all but 2–4 boxes packed in a way that cannot
   be completed), so the lever is recognising those dead ends early:
