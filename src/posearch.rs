@@ -300,7 +300,7 @@ impl<'a> Search<'a> {
     /// Expand node `idx`: generate its pushes; dive into a child that is no
     /// worse than this node and the best open entry, queue the others.
     fn expand(&mut self, idx: u32, depth: usize) {
-        if self.solved.is_some() || (self.nodes.len() % 1024 == 0 && self.out_of_time()) {
+        if self.solved.is_some() || self.out_of_time() {
             return;
         }
         let board = self.board;
