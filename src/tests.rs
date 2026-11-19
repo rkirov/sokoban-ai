@@ -408,3 +408,11 @@ fn backward_solutions_replay_in_both_move_shapes() {
     }
     assert!(solved[0] >= 35 && solved[1] >= 35, "{solved:?}");
 }
+
+#[test]
+fn a_panicking_solve_ends_the_memory_watchdog() {
+    // Before, the watchdog never stopped and the scope waited on it forever.
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let r = std::panic::catch_unwind(|| crate::with_memory_limit(u64::MAX, &stop, || -> () { panic!("boom") }));
+    assert!(r.is_err());
+}
