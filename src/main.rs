@@ -131,7 +131,18 @@ fn solve_auto(board: &Board, base: &Options, strategies: &[Strategy]) -> (Outcom
                 })
             })
             .collect();
-        threads.into_iter().map(|t| t.join().unwrap()).collect()
+        // A strategy that panics (its message is already on stderr) found
+        // nothing; the others' outcomes still stand.
+        threads
+            .into_iter()
+            .zip(strategies)
+            .map(|(t, strategy)| {
+                t.join().unwrap_or_else(|_| {
+                    eprintln!("WARNING: {} panicked on {}; counted as no result", strategy.name(), board.name);
+                    Outcome::Exhausted { stats: Default::default() }
+                })
+            })
+            .collect()
     });
 
     if outcomes.iter().any(|o| matches!(o, Outcome::Solved { .. })) {
@@ -167,6 +178,14 @@ fn with_memory_limit<T: Send>(
     solve: impl FnOnce() -> T + Send,
 ) -> T {
     use std::sync::atomic::{AtomicBool, Ordering};
+    /// Ends the watchdog when dropped, so also when `solve` panics: the scope
+    /// waits for the watchdog before passing the panic on.
+    struct Done<'a>(&'a AtomicBool);
+    impl Drop for Done<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
     let done = AtomicBool::new(false);
     std::thread::scope(|s| {
         s.spawn(|| {
@@ -177,9 +196,8 @@ fn with_memory_limit<T: Send>(
                 std::thread::sleep(Duration::from_millis(50));
             }
         });
-        let result = solve();
-        done.store(true, Ordering::Relaxed);
-        result
+        let _done = Done(&done);
+        solve()
     })
 }
 
